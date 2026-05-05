@@ -1,5 +1,5 @@
 // @agent flagship #1 — sync action against an inline mock forecast table.
-// Demonstrates the scribe-unique capability: every component readable as MCP.
+// Demonstrates the aihu-unique capability: every component readable as MCP.
 // No network: keeps the example self-contained and offline-runnable.
 
 @state {

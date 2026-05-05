@@ -1,5 +1,5 @@
 @state {
-import { signal } from '@scribe/signals'
+import { signal } from '@aihu/signals'
 const [msg, setMsg] = signal('hello')
 const [count, setCount] = signal(0)
 }

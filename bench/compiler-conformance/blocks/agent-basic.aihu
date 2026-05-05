@@ -1,5 +1,5 @@
 @state {
-import { signal } from '@scribe/signals'
+import { signal } from '@aihu/signals'
 const [greeting, setGreeting] = signal('')
 }
 

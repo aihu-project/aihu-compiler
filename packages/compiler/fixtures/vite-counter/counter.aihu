@@ -1,5 +1,5 @@
 @state {
-import { signal } from '@scribe/signals'
+import { signal } from '@aihu/signals'
 
 const [count, setCount] = signal(0)
 const increment = () => setCount(c => c + 1)
