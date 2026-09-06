@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+coverage/
+packages/compiler/pkg-wasm/
+packages/compiler/src-native/target/
+packages/compiler/src-native/*.node
+packages/compiler/npm/*/aihu-compile
+packages/compiler/npm/*/aihu-compile.exe
+packages/compiler/npm-native/*/*.node

@@ -2376,7 +2376,11 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
             { cause: err },
           )
         }
-        return await _stripTypes(vite, out, rawId, isServerEnv)
+        // Vite's public return type has changed across supported releases, but
+        // this boundary only reads `code` after the runtime capability checks
+        // in `_stripTypes`. Keep the version-specific module type out of the
+        // compiler's stable seam.
+        return await _stripTypes(vite as unknown as ViteStripApi, out, rawId, isServerEnv)
       })()
     },
   }

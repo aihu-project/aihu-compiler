@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["packages/compiler"]
+exclude = ["packages/compiler/src-native"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/aihu-project/aihu-compiler"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

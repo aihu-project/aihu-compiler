@@ -51,15 +51,14 @@
     }
   },
   "devDependencies": {
-    "@aihu/css-engine": "workspace:*"
+    "@aihu/css-engine": "^0.6.1"
   },
   "description": "Single File Component (.aihu) compiler — Rust binary + JS glue.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aihu-project/aihu.git",
-    "directory": "packages/compiler"
+    "url": "git+https://github.com/aihu-project/aihu-compiler.git"
   },
-  "homepage": "https://github.com/aihu-project/aihu/tree/main/packages/compiler#readme",
+  "homepage": "https://github.com/aihu-project/aihu-compiler#readme",
   "bugs": "https://github.com/aihu-project/aihu/issues",
   "publishConfig": {
     "access": "public"
