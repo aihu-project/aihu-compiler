@@ -210,14 +210,17 @@ jobs:
             test -s "$binary"
             cp "$binary" "$dest"
             [[ "$platform" == win32-* ]] || chmod 0755 "$dest"
-            args="--dry-run"
             if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-              args=""
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
               if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
+              (cd "$dir" && npm publish --access public)
+            else
+              # `npm publish --dry-run` still consults the registry and rejects
+              # an already-published version. Packing proves the artifact
+              # contents without a registry-side version constraint.
+              (cd "$dir" && npm pack --dry-run)
             fi
-            (cd "$dir" && npm publish --access public $args)
           done
 
   publish-addons:
@@ -245,14 +248,16 @@ jobs:
             binary=$(find "artifacts/aihu-compiler-native-$platform" -name '*.node' -type f -print -quit)
             test -n "$binary" && test -s "$binary"
             cp "$binary" "$dir/$(basename "$binary")"
-            args="--dry-run"
             if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-              args=""
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
               if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
+              (cd "$dir" && npm publish --access public)
+            else
+              # See the CLI platform-pack step: this validates contents while
+              # allowing a repeatable dry run at an already-published version.
+              (cd "$dir" && npm pack --dry-run)
             fi
-            (cd "$dir" && npm publish --access public $args)
           done
 
   publish-compiler:
@@ -279,11 +284,12 @@ jobs:
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
         run: |
           set -euo pipefail
-          args="--dry-run"
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-            args=""
             version=$(node -p "require('./packages/compiler/package.json').version")
             if npm view "@aihu/compiler@$version" version >/dev/null 2>&1; then exit 0; fi
+            cd packages/compiler
+            npm publish --access public
+          else
+            cd packages/compiler
+            npm pack --dry-run
           fi
-          cd packages/compiler
-          npm publish --access public $args
