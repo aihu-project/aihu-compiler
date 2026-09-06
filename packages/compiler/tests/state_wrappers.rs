@@ -383,7 +383,7 @@ fn old_macro_dialect_agent_weather_still_compiles() {
 
 #[test]
 fn old_signal_tuple_dialect_still_compiles() {
-    let js = emit_file("../../examples/live-counter/live-counter.aihu").js;
+    let js = emit_file("tests/fixtures/legacy/live-counter.aihu").js;
     assert!(js.contains("signal("), "{js}");
 }
 

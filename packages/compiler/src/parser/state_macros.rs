@@ -2801,7 +2801,7 @@ mod tests {
 
     #[test]
     fn parse_canonical_color_theme_state_block() {
-        // examples/_shared/macro-test.aihu lines 28–72 (active substance —
+        // tests/fixtures/legacy/macro-test.aihu lines 28–72 (active substance —
         // commented stretch at lines 74–99 omitted).
         let src = "\
 $prop: {

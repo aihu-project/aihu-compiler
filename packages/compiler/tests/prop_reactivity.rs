@@ -15,7 +15,7 @@
 //!   it from observedAttributes.
 //! - **AC7**: `reflect: true` is forwarded verbatim.
 //! - **AC8**: `converter` is forwarded verbatim.
-//! - **AC9**: existing `.aihu` files in `examples/` still compile.
+//! - **AC9**: frozen legacy `.aihu` regression fixtures still compile.
 //! - **AC11**: `attribute: false + reflect: true` is a compile error (C445).
 //!
 //! Non-$prop SFCs are not touched (snapshot regression coverage in `codegen.rs`).
@@ -187,11 +187,11 @@ fn r1_ac11_attribute_false_plus_reflect_true_rejected() {
     );
 }
 
-// AC9 — existing examples still compile (regression smoke). example-shell.aihu
-// is the canonical existing $prop user in the repo.
+// AC9 — frozen legacy fixture compiles (regression smoke). example-shell.aihu
+// is the canonical $prop regression input.
 #[test]
 fn r1_ac9_existing_example_shell_still_compiles() {
-    let src = include_str!("../../../examples/_shared/example-shell.aihu");
+    let src = include_str!("fixtures/legacy/example-shell.aihu");
     let parsed = sfc::parse(src).unwrap();
     let unit = compile_full(&parsed).expect("example-shell.aihu must still compile");
     let js = emit(&unit, "example-shell").js;
@@ -201,14 +201,14 @@ fn r1_ac9_existing_example_shell_still_compiles() {
     assert!(js.contains("ctx.props.liveUrl"), "liveUrl prop accessor present");
 }
 
-// AC9 — weather-card.aihu compiles (regression smoke). The example was
+// AC9 — weather-card.aihu compiles (regression smoke). The fixture was
 // rebuilt in 578508e to use standalone signals + `$computed`/`$action`
 // instead of `$prop` (the agent surface now comes from inline `expose:` on
 // the computeds/action), so this asserts that computed/action lowering — not
 // prop rebinding — still emits.
 #[test]
 fn r1_ac9_existing_weather_card_compiles() {
-    let src = include_str!("../../../examples/weather-card/weather-card.aihu");
+    let src = include_str!("fixtures/legacy/weather-card.aihu");
     let parsed = sfc::parse(src).unwrap();
     let unit = compile_full(&parsed).expect("weather-card.aihu must still compile");
     let js = emit(&unit, "weather-card").js;

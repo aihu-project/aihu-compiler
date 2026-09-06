@@ -1393,7 +1393,7 @@ pub(crate) fn emit_props_config(prop_entries: &[&crate::types::CollectionEntry],
         // mirrors the spec sketch in §3.6 of the platform audit.
         let mut bag: Vec<String> = Vec::new();
         // value: comes from `default:` (existing key) per spec §3.6 + the
-        // existing $prop entries in the wild (see examples/weather-card.aihu).
+        // frozen legacy $prop regression input (see tests/fixtures/legacy/weather-card.aihu).
         if let Some(default_raw) = meta_get(entry, "default") {
             bag.push(format!("value: {}", default_raw.trim()));
         }
