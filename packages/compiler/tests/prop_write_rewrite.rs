@@ -21,7 +21,7 @@ fn emit_file(path: &str) -> String {
 }
 
 fn repo_path(rel: &str) -> std::path::PathBuf {
-    // CARGO_MANIFEST_DIR is packages/compiler; the fixtures live at the repo root.
+    // CARGO_MANIFEST_DIR is packages/compiler; shared cookbook fixtures live at the repo root.
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(rel)
@@ -78,7 +78,7 @@ fn ssr_hydration_lifecycle_lowers_to_set() {
 fn macro_test_wrapped_handler_lowers_to_set() {
     // The wrapped `handler:` form with TS-typed params — which is why the
     // synthetic wrapper parses as `SourceType::ts()`.
-    let js = emit_file("examples/_shared/macro-test.aihu");
+    let js = emit_file("packages/compiler/tests/fixtures/legacy/macro-test.aihu");
     assert!(js.contains("hue.set(h)"), "{js}");
     assert!(js.contains("saturation.set(70)"), "{js}");
     assert!(js.contains("lightness.set(55)"), "{js}");
@@ -124,11 +124,11 @@ fn hacker_news_item_is_unchanged_by_co1() {
     // Substituting this file into CO1's acceptance set would make the slice
     // unfalsifiable — you would be chasing a router-macro bug under a
     // prop-write brief.
-    let rel = "examples/hacker-news/src/pages/item/[id].aihu";
-    let src = std::fs::read_to_string(repo_path(rel)).unwrap();
+    let fixture = "packages/compiler/tests/fixtures/legacy/hacker-news-item.aihu";
+    let src = std::fs::read_to_string(repo_path(fixture)).unwrap();
     // A `@route` block is only valid under `src/pages/`, so this file needs
     // path-aware parsing.
-    let parsed = aihu_compiler::compile_with_path(&src, Some(rel)).unwrap();
+    let parsed = aihu_compiler::compile_with_path(&src, Some("src/pages/item/[id].aihu")).unwrap();
     let unit = compile_full(&parsed).unwrap();
     let js = emit(&unit, "x-test").js;
     assert!(

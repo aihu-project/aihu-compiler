@@ -14,8 +14,9 @@
     "typecheck": "bun run --cwd packages/compiler typecheck",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:rust": "cargo test --manifest-path packages/compiler/Cargo.toml",
-    "check": "bun run check:lint && bun run typecheck && bun run test:unit && bun run test:rust",
-    "check:lint": "biome ci ."
+    "check": "bun run check:lint && bun run check:release-manifests && bun run typecheck && bun run test:unit && bun run test:rust",
+    "check:lint": "biome ci .",
+    "check:release-manifests": "bun scripts/check-release-manifests.ts"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",
