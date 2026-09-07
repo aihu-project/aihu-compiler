@@ -351,7 +351,17 @@ pub(crate) fn emit_node(
             } else {
                 attrs
             };
-            let attrs_str = emit_attrs(attrs_for_emit, inner_state_names, inner_signal_map, mode);
+            // Bound values on a component are properties, not HTML attributes.
+            // This protects callbacks from Arbor's DOM listener shortcut and
+            // avoids an assignment decision made before a custom element upgrades.
+            let is_component = crate::tags::is_component_tag(tag);
+            let attrs_str = emit_attrs_for_element(
+                attrs_for_emit,
+                inner_state_names,
+                inner_signal_map,
+                mode,
+                is_component,
+            );
             let has_element_child = children
                 .iter()
                 .any(|c| matches!(c, TemplateNode::Element { .. }));
@@ -1374,6 +1384,19 @@ pub(crate) fn emit_attrs(
     signal_map: &SignalMap,
     mode: ExprParserMode,
 ) -> String {
+    emit_attrs_for_element(attrs, state_names, signal_map, mode, false)
+}
+
+/// Emit an element attribute object. Bound values on a component use Arbor's
+/// compiler-only property channel. `on:<event>` remains the explicit DOM or
+/// custom-event listener spelling, while `onSave={handler}` is a prop.
+fn emit_attrs_for_element(
+    attrs: &[Attr],
+    state_names: &StateNames,
+    signal_map: &SignalMap,
+    mode: ExprParserMode,
+    component_props: bool,
+) -> String {
     // Filter out macro attrs that aren't pure attribute expressions
     // (those are handled via emit_macro_effects instead).
     //
@@ -1414,7 +1437,7 @@ pub(crate) fn emit_attrs(
                 // runtime's Path 1 (typeof === 'function'). They MUST stay raw —
                 // wrapping them in a thunk array would put a function value
                 // inside an array and trigger Path 2 instead, breaking events.
-                let is_event = is_event_attr_name(name);
+                let is_event = !component_props && is_event_attr_name(name);
                 // B3 — `class={[a, b && 'c']}` array form. When the binding is
                 // `class` and the expression syntactically starts with `[`, wrap
                 // the expression in `__aihu_cls([…])` so the runtime joins truthy
@@ -1454,7 +1477,12 @@ pub(crate) fn emit_attrs(
                 } else {
                     lower_attr_expr(expr, state_names, signal_map, mode)
                 };
-                Some(format!("{}: {}", format_attr_key(name), lowered))
+                let key = if component_props {
+                    format_attr_key(&format!("__aihu_prop:{}", name))
+                } else {
+                    format_attr_key(name)
+                };
+                Some(format!("{}: {}", key, lowered))
             }
             Attr::Macro { name, value } => {
                 // $bind:prop and $on:event emit as direct attrs in the attrs object;
@@ -1569,10 +1597,15 @@ pub(crate) fn emit_attrs(
     }
 }
 
-/// Quote attribute keys that aren't valid bare JS identifiers (hyphenated
-/// names like `aria-label`, `data-foo`, custom-attr keys for web components).
+/// Quote attribute keys that are not valid bare JS identifiers. This includes
+/// HTML names such as `aria-label` and compiler-only keys containing `:`.
 fn format_attr_key(name: &str) -> String {
-    if name.contains('-') {
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if !valid {
         format!("'{}'", name)
     } else {
         name.to_string()
