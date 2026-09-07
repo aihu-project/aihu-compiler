@@ -12,7 +12,7 @@ fn component_bound_props_use_property_channel() {
   const label = 'dynamic'
 }
 @template {
-  <child-card onSave={onSave} back={back} label={label} title="static"></child-card>
+  <child-card onSave={onSave} back={back} label={label} aria-label={label} data-state={label} title="static"></child-card>
   <button onClick={onSave}></button>
 }
 "#;
@@ -24,6 +24,16 @@ fn component_bound_props_use_property_channel() {
         assert!(
             js.contains(&format!("'__aihu_prop:{prop}':")),
             "component prop `{prop}` must use the property channel, got:\n{js}"
+        );
+    }
+    for attr in ["aria-label", "data-state"] {
+        assert!(
+            js.contains(&format!("'{attr}':")),
+            "component attribute `{attr}` must keep its public attribute name, got:\n{js}"
+        );
+        assert!(
+            !js.contains(&format!("'__aihu_prop:{attr}':")),
+            "component attribute `{attr}` must not use the property marker, got:\n{js}"
         );
     }
     assert!(

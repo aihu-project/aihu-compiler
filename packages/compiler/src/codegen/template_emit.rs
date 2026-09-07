@@ -1477,7 +1477,7 @@ fn emit_attrs_for_element(
                 } else {
                     lower_attr_expr(expr, state_names, signal_map, mode)
                 };
-                let key = if component_props {
+                let key = if component_props && is_component_property_name(name) {
                     format_attr_key(&format!("__aihu_prop:{}", name))
                 } else {
                     format_attr_key(name)
@@ -1623,6 +1623,15 @@ pub(crate) fn is_event_attr_name(name: &str) -> bool {
     // lowercase letter that pairs with a known DOM event (heuristic: any
     // remaining char is alphabetic).
     name.as_bytes()[2].is_ascii_alphabetic()
+}
+
+/// Aihu component props are normally named as JavaScript properties. Keep
+/// standard attribute namespaces on the attribute channel: browsers expose
+/// those names through the accessibility and dataset maps, not through custom
+/// element properties. Arbor's normal reactive-attribute path still updates
+/// them after the custom element upgrades.
+fn is_component_property_name(name: &str) -> bool {
+    !name.starts_with("aria-") && !name.starts_with("data-")
 }
 
 /// Lower a binding expression for the runtime attr setter. When the expression
