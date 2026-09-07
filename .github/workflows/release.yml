@@ -201,6 +201,7 @@ jobs:
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in packages/compiler/npm/*/; do
@@ -241,6 +242,7 @@ jobs:
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in packages/compiler/npm-native/*/; do
@@ -282,6 +284,7 @@ jobs:
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
