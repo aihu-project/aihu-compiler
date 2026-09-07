@@ -1,0 +1,35 @@
+{
+  "name": "@aihu/compiler-wasm",
+  "version": "1.3.3",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./aihu_compiler.d.ts",
+      "import": "./aihu_compiler.js"
+    },
+    "./aihu_compiler.js": "./aihu_compiler.js",
+    "./aihu_compiler_bg.wasm": "./aihu_compiler_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "aihu_compiler.js",
+    "aihu_compiler_bg.wasm",
+    "aihu_compiler.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "description": "WebAssembly build of the Aihu Single File Component compiler.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aihu-project/aihu-compiler.git"
+  },
+  "homepage": "https://github.com/aihu-project/aihu-compiler#readme",
+  "bugs": {
+    "url": "https://github.com/aihu-project/aihu-compiler/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

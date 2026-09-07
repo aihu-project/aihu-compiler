@@ -115,62 +115,27 @@ PASS = p50 < 200ms (Directive 1 §2). FAIL surfaces the actual measurement.
 
 `cargo build --release -p aihu-compiler` and `cargo test -p aihu-compiler` continue to work unchanged. The `[lib] crate-type = ["cdylib", "rlib"]` preserves the rlib for native consumers; cdylib is only activated by `wasm-pack`. The `wasm-bindgen` and `serde-wasm-bindgen` deps are gated under `[target.'cfg(target_arch = "wasm32")'.dependencies]` so they don't enter the native build at all.
 
-## CI Release Flow
+## Published package
 
-Per arch-4 §4 + §4.6, every `v*` tag push to `.github/workflows/release.yml` produces:
+Every compiler release builds the browser bundle once and publishes it as
+`@aihu/compiler-wasm` at the same version as `@aihu/compiler`. The package
+contains the wasm-pack JavaScript glue, the `.wasm` binary, and its type
+declaration; it has no native dependency or postinstall step.
 
-| Asset | Source job | Consumer |
-|---|---|---|
-| `aihu-compile-darwin-arm64`, `…-darwin-x64`, `…-linux-x64`, `…-linux-arm64`, `…-windows-x64.exe` | `build` matrix (5 targets) | `js/postinstall.ts` — downloads the asset matching `process.platform` × `process.arch` on `npm install`. |
-| `<asset>.sha256` (one per binary) | `build` matrix | `js/postinstall.ts` — verified against `crypto.createHash('sha256')` of the downloaded binary; mismatch is a hard fail (binary deleted, `process.exit(1)`). |
-| `aihu-compile-wasm.tar.gz` | `build-wasm` job | FALLBACK ONLY for the homepage playground (Directive 1) — since #491 the docs prebuild (`scripts/build-wasm-bundle.ts`) builds `pkg-wasm/` from the workspace compiler so the playground grammar always matches the checkout; the release tarball is fetched only when the wasm toolchain is unavailable (and may lag the workspace grammar). |
-| `aihu-compile-wasm.tar.gz.sha256` | `build-wasm` job | Same — sidecar verification before extraction. |
+The release job follows this sequence:
 
-### Cross-compilation for aarch64-linux
+1. Build `packages/compiler/pkg-wasm/` with `wasm-pack` for
+   `wasm32-unknown-unknown`.
+2. Stage only runtime files with `scripts/stage-wasm-package.ts`.
+3. Run `npm pack --dry-run` against the staged package, then publish it when
+   the release is not a dry run.
+4. Publish `@aihu/compiler` only after its CLI platform packages, native
+   addons, and WASM package have all published successfully.
 
-`aarch64-unknown-linux-gnu` cannot be built natively on the GitHub-hosted Ubuntu runners; the matrix entry sets `use_cross: true`, which:
+Consumers should install a matching `@aihu/compiler-wasm` version and copy or
+import its `aihu_compiler.js` and `aihu_compiler_bg.wasm` files. This gives the
+browser the same versioned compiler used by build tooling without making a
+website's CI install Rust or compile the compiler source.
 
-1. Installs `cross` (pinned commit `4090beca3cfffa44371a5bba524de3a578aa46c3` for reproducibility).
-2. Runs `cross build --release --target aarch64-unknown-linux-gnu --manifest-path packages/compiler/Cargo.toml` — `cross` provisions an emulated build environment via Docker.
-
-All other targets use the native runner toolchain (`cargo build`).
-
-### WASM build job
-
-The `build-wasm` job runs in parallel with the platform-binary matrix:
-
-```bash
-rustup target add wasm32-unknown-unknown
-curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-cd packages/compiler && wasm-pack build --target web --out-dir pkg-wasm
-tar -czf aihu-compile-wasm.tar.gz -C packages/compiler pkg-wasm
-```
-
-Size gate: the job **fails** (`::error::` + exit 1) if the gzipped `.wasm` exceeds 500 KB (Directive 1 acceptance criterion #3 + arch-4 §4.6). W2 turned the old non-blocking warning into a hard assert — with oxc embedded, a deliberate chunk of the budget is spent, so regressions must block the release. See "Size Budget & Measured Sizes" above for current numbers.
-
-### SHA256 verification
-
-`js/postinstall.ts` follows arch-4 §4.3:
-
-1. Resolves asset name from `process.platform` × `process.arch`.
-2. Downloads `releases/latest/download/<asset>` (or the pinned tag).
-3. Downloads `releases/latest/download/<asset>.sha256` (sidecar).
-4. Computes `crypto.createHash('sha256')` of the downloaded binary.
-5. Compares against the sidecar value (case-insensitive hex match, regex-validated `^[0-9a-f]{64}$`).
-6. **Mismatch:** deletes the binary, prints both digests, exits 1.
-7. **Sidecar 404 / network error:** soft-warn (lets pre-v1.1 releases without sidecars install successfully — temporary; v1.1+ tags always emit sidecars).
-
-### Dry-run via workflow_dispatch
-
-Manual `workflow_dispatch` runs `build` + `build-wasm` and uploads artifacts to the workflow run, but the `release` job is gated by `if: startsWith(github.ref, 'refs/tags/v')` — no GitHub Release is created. Use this to validate the workflow before cutting a real tag.
-
-### Spec sources
-
-- arch-4 §4 — pre-built compiler binary distribution
-- arch-4 §4.3 — SHA256 sidecar verification
-- arch-4 §4.6 — WASM bundle for browser playground
-- Directive 1 — interactive homepage playground; latency + bundle-size targets
-
-## Spec source
-
-This implementation closes the WASM track in arch-4 §4.6. Updates to this document should cite arch-4 §4.6 and Directive 1 from `docs/roadmap/_user-directives.md`.
+The release job fails if the gzip-compressed `.wasm` exceeds 500 KB. See
+"Size Budget & Measured Sizes" for the current baseline.
