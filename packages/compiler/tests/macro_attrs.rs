@@ -480,7 +480,8 @@ fn r4_ac1_bind_to_non_signal_skips_writeback() {
 #[test]
 fn r2_attr_referencing_state_class_property_wraps_in_thunk() {
     // Plain class-property declaration `events = []` declares state. The
-    // template binding `events={events}` MUST lower to `events: [() => (events)]`
+    // template binding `events={events}` MUST lower to the component property
+    // channel with `[() => (events)]`
     // — otherwise arbor's `_applyAttrs` sees the raw `[]` value, treats
     // `Array.isArray` as a Signal tuple, and throws
     // `TypeError: c is not a function` when it invokes `value[0]()`.
@@ -504,7 +505,7 @@ fn r2_attr_referencing_state_class_property_wraps_in_thunk() {
     let unit = compile_full(&parsed).unwrap();
     let result = emit(&unit, "my-comp");
     assert!(
-        result.js.contains("events: [() => (events)]"),
+        result.js.contains("'__aihu_prop:events': [() => (events)]"),
         "Expected reactive thunk wrap for state-referencing binding; got:\n{}",
         result.js
     );
