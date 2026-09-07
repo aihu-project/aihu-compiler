@@ -8,3 +8,5 @@ packages/compiler/src-native/*.node
 packages/compiler/npm/*/aihu-compile
 packages/compiler/npm/*/aihu-compile.exe
 packages/compiler/npm-native/*/*.node
+.codemap/*
+!.codemap/config.json
