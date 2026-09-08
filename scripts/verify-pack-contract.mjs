@@ -46,12 +46,44 @@ function exportTargets(value, targets) {
     for (const item of Object.values(value)) exportTargets(item, targets)
 }
 
+const number = '(?:0|[1-9]\\d*)'
+const fullVersion = `${number}\\.${number}\\.${number}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?`
+const partialVersion = `${number}(?:\\.${number}){0,2}`
+const wildcardVersion = `(?:${number}|[xX*])(?:\\.(?:${number}|[xX*])){0,2}`
+const rangeAtom = new RegExp(
+  `^(?:[v=]\\s*)?(?:(?:[<>]=?|[~^])\\s*)?(?:${fullVersion}|${partialVersion}|${wildcardVersion})$`,
+)
+
+function isSemverRange(spec) {
+  if (typeof spec !== 'string' || !spec.trim()) return false
+  const value = spec.trim()
+  if (/^(?:workspace|file|link|git|github|git\\+|https?|ssh|npm):/i.test(value)) return false
+  if (/^git@/i.test(value)) return false
+  return value.split('||').every((part) => {
+    const range = part.trim().replace(/([<>]=?|[~^])\s+/g, '$1')
+    if (!range) return false
+    const hyphen = range.match(/^(.+?)\s+-\s+(.+)$/)
+    if (hyphen) return rangeAtom.test(hyphen[1].trim()) && rangeAtom.test(hyphen[2].trim())
+    return range.split(/\s+/).every((atom) => rangeAtom.test(atom))
+  })
+}
+
+export function assertPublicRegistrySemverDependencies(manifest) {
+  for (const section of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+    for (const [name, spec] of Object.entries(manifest[section] ?? {})) {
+      if (!isSemverRange(spec))
+        throw new Error(`${section}.${name} must be a public registry semver range`)
+    }
+  }
+}
+
 export function verifyPackage(root, packDir) {
   root = resolve(root)
   packDir = resolve(packDir)
   rmSync(packDir, { recursive: true, force: true })
   mkdirSync(packDir, { recursive: true })
   const source = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  assertPublicRegistrySemverDependencies(source)
   const packed = JSON.parse(
     execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir], {
       cwd: root,
@@ -69,8 +101,7 @@ export function verifyPackage(root, packDir) {
   for (const field of manifestFields)
     if (JSON.stringify(got[field]) !== JSON.stringify(source[field]))
       throw new Error(`manifest field ${field} changed in tarball`)
-  if (JSON.stringify(got).includes('workspace:'))
-    throw new Error('workspace dependency leaked into tarball')
+  assertPublicRegistrySemverDependencies(got)
   const entries = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' })
     .trim()
     .split('\n')

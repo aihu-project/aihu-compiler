@@ -9,26 +9,25 @@ if (!archive || !packageDir)
   throw new Error('usage: node scripts/consumer-smoke.mjs /absolute/path/package.tgz package-dir')
 const manifest = JSON.parse(readFileSync(resolve(packageDir, 'package.json'), 'utf8'))
 const dir = mkdtempSync(join(tmpdir(), 'aihu-compiler-consumer-'))
-let installed
-if (manifest.os || manifest.cpu || manifest.libc) {
-  execFileSync('tar', ['-xzf', resolve(archive), '-C', dir], { stdio: 'inherit' })
-  installed = resolve(dir, 'package')
-} else {
-  execFileSync('npm', ['init', '-y'], { cwd: dir, stdio: 'ignore' })
-  execFileSync(
-    'npm',
-    [
-      'install',
-      '--ignore-scripts',
-      '--no-package-lock',
-      '--no-audit',
-      '--no-fund',
-      resolve(archive),
-    ],
-    { cwd: dir, stdio: 'inherit' },
-  )
-  installed = resolve(dir, 'node_modules', ...manifest.name.split('/'))
-}
+execFileSync('npm', ['init', '-y'], { cwd: dir, stdio: 'ignore' })
+const platformOptions = []
+if (manifest.os?.length === 1) platformOptions.push(`--os=${manifest.os[0]}`)
+if (manifest.cpu?.length === 1) platformOptions.push(`--cpu=${manifest.cpu[0]}`)
+if (manifest.libc?.length === 1) platformOptions.push(`--libc=${manifest.libc[0]}`)
+execFileSync(
+  'npm',
+  [
+    'install',
+    '--ignore-scripts',
+    '--no-package-lock',
+    '--no-audit',
+    '--no-fund',
+    ...platformOptions,
+    resolve(archive),
+  ],
+  { cwd: dir, stdio: 'inherit' },
+)
+const installed = resolve(dir, 'node_modules', ...manifest.name.split('/'))
 if (typeof manifest.main === 'string' && /\.(?:node|exe)$/.test(manifest.main)) {
   if (!existsSync(resolve(installed, manifest.main))) throw new Error('consumer binary is missing')
 } else {
