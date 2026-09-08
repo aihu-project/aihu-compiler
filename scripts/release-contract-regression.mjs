@@ -6,6 +6,7 @@ import { assertPublicRegistrySemverDependencies } from './verify-pack-contract.m
 const root = resolve('.')
 const repo = basename(root)
 const workflow = readFileSync(resolve(root, '.github/workflows/release.yml'), 'utf8')
+const releaseDoc = readFileSync(resolve(root, 'packages/compiler/RELEASE.md'), 'utf8')
 const pack = readFileSync(resolve(root, 'scripts/verify-pack-contract.mjs'), 'utf8')
 const auth = readFileSync(resolve(root, 'scripts/check-oidc-auth.mjs'), 'utf8')
 if (/--force|registry-url|secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/.test(workflow))
@@ -91,6 +92,25 @@ if (
   throw new Error('compiler release permits an arbitrary manual source or unpinned wasm installer')
 if (repo === 'aihu-compiler' && !workflow.includes('assert-compiler-platform.mjs'))
   throw new Error('compiler release does not assert native platform metadata')
+if (repo === 'aihu-compiler') {
+  for (const [platform, runner, target, asset] of [
+    ['darwin-arm64', 'macos-14', 'aarch64-apple-darwin', 'aihu-compile-darwin-arm64'],
+    ['darwin-x64', 'macos-14', 'x86_64-apple-darwin', 'aihu-compile-darwin-x64'],
+    ['linux-x64-gnu', 'ubuntu-22.04', 'x86_64-unknown-linux-gnu', 'aihu-compile-linux-x64-gnu'],
+    [
+      'linux-arm64-gnu',
+      'ubuntu-22.04',
+      'aarch64-unknown-linux-gnu',
+      'aihu-compile-linux-arm64-gnu',
+    ],
+    ['win32-x64-msvc', 'windows-2022', 'x86_64-pc-windows-msvc', 'aihu-compile-win32-x64-msvc'],
+  ]) {
+    const row = new RegExp(
+      `\\|\\s*${platform}\\s*\\|\\s*${runner}\\s*\\|\\s*${target}\\s*\\|\\s*${asset}\\s*\\|`,
+    )
+    if (!row.test(releaseDoc)) throw new Error(`release guide omits current ${platform} asset row`)
+  }
+}
 if (
   repo === 'aihu-dom' &&
   (!/push:\s*\n\s*tags:/.test(workflow) ||

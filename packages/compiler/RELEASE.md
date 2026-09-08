@@ -61,12 +61,13 @@ npm install --ignore-scripts @aihu/compiler@1.3.7
 
 ## Asset naming
 
-| Target           | Runner       | Rust target                  | Asset name                          |
-| ---------------- | ------------ | ---------------------------- | ----------------------------------- |
-| mac-arm64        | macos-14     | aarch64-apple-darwin         | aihu-compile-darwin-arm64         |
-| mac-x64          | macos-13     | x86_64-apple-darwin          | aihu-compile-darwin-x64           |
-| linux-x64        | ubuntu-22.04 | x86_64-unknown-linux-gnu     | aihu-compile-linux-x64            |
-| windows-x64      | windows-2022 | x86_64-pc-windows-msvc       | aihu-compile-windows-x64.exe      |
+| Platform          | Runner       | Rust target               | Asset name                    |
+| ---------------- | ------------ | ------------------------- | ----------------------------- |
+| darwin-arm64     | macos-14     | aarch64-apple-darwin      | aihu-compile-darwin-arm64     |
+| darwin-x64       | macos-14     | x86_64-apple-darwin       | aihu-compile-darwin-x64       |
+| linux-x64-gnu    | ubuntu-22.04 | x86_64-unknown-linux-gnu  | aihu-compile-linux-x64-gnu    |
+| linux-arm64-gnu  | ubuntu-22.04 | aarch64-unknown-linux-gnu | aihu-compile-linux-arm64-gnu  |
+| win32-x64-msvc   | windows-2022 | x86_64-pc-windows-msvc    | aihu-compile-win32-x64-msvc   |
 
 The release workflow rejects unsupported platform metadata, missing binaries,
 unexpected tarball files, non-OIDC npm credentials, and published versions
