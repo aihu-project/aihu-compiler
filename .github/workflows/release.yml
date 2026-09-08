@@ -3,25 +3,17 @@ name: Release compiler
 on:
   push:
     tags: ['compiler-v*']
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish packages to npm. Leave false to exercise the full dry-run.
-        required: false
-        type: boolean
-        default: false
-      dry_run:
-        description: Validate npm packages without publishing them.
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
+  pull-requests: read
   id-token: write
 
 env:
   RUSTUP_TOOLCHAIN: '1.95.0'
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+  NPM_CONFIG_USERCONFIG: /tmp/aihu-compiler-npmrc-oidc-only
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 
 jobs:
   prepare:
@@ -32,21 +24,23 @@ jobs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       native_release: ${{ steps.mode.outputs.native_release }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
       - run: bun run check:release-manifests
+      - run: node scripts/release-contract-regression.mjs
       - id: mode
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_PUBLISH: ${{ inputs.publish || false }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$RELEASE_SHA" FETCH_HEAD
           publish=false
           dry_run=true
           host_version=$(node -p "require('./packages/compiler/package.json').version")
@@ -57,17 +51,20 @@ jobs:
           fi
           if [ "$EVENT_NAME" = push ]; then
             test "$REF_NAME" = "compiler-v$host_version"
+            test "$(git rev-parse "$REF_NAME^{commit}")" = "${{ github.sha }}"
             publish=true
             dry_run=false
-          elif [ "$INPUT_PUBLISH" = true ]; then
-            publish=true
-            dry_run="$INPUT_DRY_RUN"
           fi
           {
             echo "publish=$publish"
             echo "dry_run=$dry_run"
             echo "native_release=$native_release"
           } >> "$GITHUB_OUTPUT"
+      - name: Verify reviewed merged release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: node scripts/assert-reviewed-release.mjs
 
   build-cli:
     name: Build CLI ${{ matrix.platform }}
@@ -105,7 +102,7 @@ jobs:
             artifact: aihu-compile-win32-x64-msvc
             use_cross: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: '1.95.0'
@@ -126,7 +123,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/aihu-compile.exe" "artifact/aihu-compile.exe"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: artifact/
@@ -169,7 +166,7 @@ jobs:
             cdylib: aihu_compiler_native.dll
             use_cross: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: '1.95.0'
@@ -189,7 +186,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "packages/compiler/src-native/target/${{ matrix.target }}/release/${{ matrix.cdylib }}" "artifact/aihu-compiler-native.${{ matrix.platform }}.node"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aihu-compiler-native-${{ matrix.platform }}
           path: artifact/
@@ -202,8 +199,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
@@ -211,7 +208,7 @@ jobs:
           toolchain: '1.95.0'
           targets: wasm32-unknown-unknown
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install wasm-pack --version 0.13.1 --locked
       - name: Build browser compiler
         run: bun run --cwd packages/compiler build:wasm
       - name: Enforce compressed size budget
@@ -223,9 +220,12 @@ jobs:
       - name: Stage npm package
         run: bun scripts/stage-wasm-package.ts artifact
       - name: Verify package contents
-        run: npm pack --dry-run
-        working-directory: artifact
-      - uses: actions/upload-artifact@v7
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/compiler-wasm-verify" node scripts/verify-pack.mjs artifact
+          pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-wasm-verify")
+          node scripts/consumer-smoke.mjs "$pack_path" artifact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aihu-compiler-wasm
           path: artifact/
@@ -236,82 +236,125 @@ jobs:
     name: Pack CLI platform packages
     needs: [prepare, build-cli]
     if: needs.prepare.outputs.native_release == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    env:
+      NPM_CONFIG_USERCONFIG: .npmrc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+          - platform: linux-x64-gnu
+            runner: ubuntu-22.04
+          - platform: win32-x64-msvc
+            runner: windows-2022
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - shell: bash
+        run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - shell: bash
+        run: npm install --global npm@11.5.1 --ignore-scripts
+      - shell: bash
+        run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: aihu-compile-${{ matrix.platform }}
           path: artifacts
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
-          for dir in packages/compiler/npm/*/; do
-            platform=$(basename "$dir")
-            binary=artifacts/aihu-compile-$platform/aihu-compile
-            if [[ "$platform" == win32-* ]]; then binary="$binary.exe"; dest="$dir/aihu-compile.exe"; else dest="$dir/aihu-compile"; fi
-            test -s "$binary"
-            cp "$binary" "$dest"
-            [[ "$platform" == win32-* ]] || chmod 0755 "$dest"
-            if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-              name=$(node -p "require('./$dir/package.json').name")
-              version=$(node -p "require('./$dir/package.json').version")
-              if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
-              (cd "$dir" && npm publish --access public)
-            else
-              # `npm publish --dry-run` still consults the registry and rejects
-              # an already-published version. Packing proves the artifact
-              # contents without a registry-side version constraint.
-              (cd "$dir" && npm pack --dry-run)
-            fi
-          done
+          platform="${{ matrix.platform }}"
+          dir="packages/compiler/npm/$platform"
+          binary=artifacts/aihu-compile
+          if [[ "$platform" == win32-* ]]; then binary="$binary.exe"; dest="$dir/aihu-compile.exe"; else dest="$dir/aihu-compile"; fi
+          test -s "$binary"
+          cp "$binary" "$dest"
+          [[ "$platform" == win32-* ]] || chmod 0755 "$dest"
+          node scripts/assert-compiler-platform.mjs "$dir"
+          pack_dir="$RUNNER_TEMP/compiler-pack-$platform"
+          PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+          pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
+          if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
+            node scripts/assert-unpublished.mjs "$dir"
+          fi
+          node scripts/consumer-smoke.mjs "$pack_path" "$dir"
+          if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
+            npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
+          fi
 
   publish-addons:
     name: Pack addon platform packages
     needs: [prepare, build-addon]
     if: needs.prepare.outputs.native_release == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    env:
+      NPM_CONFIG_USERCONFIG: .npmrc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+          - platform: linux-x64-gnu
+            runner: ubuntu-22.04
+          - platform: win32-x64-msvc
+            runner: windows-2022
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - shell: bash
+        run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - shell: bash
+        run: npm install --global npm@11.5.1 --ignore-scripts
+      - shell: bash
+        run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: aihu-compiler-native-${{ matrix.platform }}
           path: artifacts
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
-          for dir in packages/compiler/npm-native/*/; do
-            platform=$(basename "$dir")
-            binary=$(find "artifacts/aihu-compiler-native-$platform" -name '*.node' -type f -print -quit)
-            test -n "$binary" && test -s "$binary"
-            cp "$binary" "$dir/$(basename "$binary")"
-            if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-              name=$(node -p "require('./$dir/package.json').name")
-              version=$(node -p "require('./$dir/package.json').version")
-              if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
-              (cd "$dir" && npm publish --access public)
-            else
-              # See the CLI platform-pack step: this validates contents while
-              # allowing a repeatable dry run at an already-published version.
-              (cd "$dir" && npm pack --dry-run)
-            fi
-          done
+          platform="${{ matrix.platform }}"
+          dir="packages/compiler/npm-native/$platform"
+          binary=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d='artifacts'; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.node')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))")
+          test -s "$binary"
+          cp "$binary" "$dir/$(basename "$binary")"
+          node scripts/assert-compiler-platform.mjs "$dir"
+          pack_dir="$RUNNER_TEMP/compiler-native-pack-$platform"
+          PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+          pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
+          if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
+            node scripts/assert-unpublished.mjs "$dir"
+          fi
+          node scripts/consumer-smoke.mjs "$pack_path" "$dir"
+          if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
+            npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
+          fi
 
   publish-wasm:
     name: Pack @aihu/compiler-wasm
@@ -319,27 +362,30 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: aihu-compiler-wasm
           path: artifact
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          version=$(node -p "require('./artifact/package.json').version")
+          PACK_DIR="$RUNNER_TEMP/compiler-wasm-pack" node scripts/verify-pack.mjs artifact
+          pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-wasm-pack")
+          node scripts/consumer-smoke.mjs "$pack_path" artifact
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-            if npm view "@aihu/compiler-wasm@$version" version >/dev/null 2>&1; then exit 0; fi
-            (cd artifact && npm publish --access public)
+            node scripts/assert-unpublished.mjs artifact
+            npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
           else
-            (cd artifact && npm pack --dry-run)
+            :
           fi
 
   publish-compiler:
@@ -368,15 +414,17 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
       # The platform packages are published by the preceding jobs. Do not
       # freeze a lockfile that predates the version being released.
       - run: bun install --ignore-scripts
@@ -384,15 +432,16 @@ jobs:
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-            version=$(node -p "require('./packages/compiler/package.json').version")
-            if npm view "@aihu/compiler@$version" version >/dev/null 2>&1; then exit 0; fi
-            cd packages/compiler
-            npm publish --access public
+            node scripts/assert-unpublished.mjs packages/compiler
+            PACK_DIR="$RUNNER_TEMP/compiler-pack" node scripts/verify-pack.mjs packages/compiler
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.env.PACK_DIR; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))")
+            node scripts/consumer-smoke.mjs "$pack_path" packages/compiler
+            npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
           else
-            cd packages/compiler
-            npm pack --dry-run
+            PACK_DIR="$RUNNER_TEMP/compiler-pack" node scripts/verify-pack.mjs packages/compiler
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-pack")
+            node scripts/consumer-smoke.mjs "$pack_path" packages/compiler
           fi
