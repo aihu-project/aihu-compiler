@@ -7,7 +7,15 @@ Single File Component (.aihu) compiler — Rust binary + JS glue.
 Part of the **compiler + toolchain** layer of Aihu. Build-time only — does not ship to the client. The compiler reads `.aihu` SFC source (per the [Block Structure spec](../../docs/superpowers/specs/2026-05-02-spec-block-structure.md)) and emits standards-compliant Web Components.
 
 <!-- BEGIN_HANDWRITTEN: prose -->
-_(Hand-written prose lives in this block. Replace this placeholder; everything below is auto-generated.)_
+
+The package exposes the compiler plugin and transform API from its root entry point. Migration tools are available as stable subpath exports so framework tooling does not need to import compiler source files:
+
+```ts
+import { migrate } from '@aihu/compiler/codemods/macro-simplification'
+import { migrateStateWrappers } from '@aihu/compiler/codemods/state-wrapper'
+import { migrateTemplateGrammar } from '@aihu/compiler/codemods/template-grammar-v2'
+```
+
 <!-- END_HANDWRITTEN: prose -->
 
 ## Install
