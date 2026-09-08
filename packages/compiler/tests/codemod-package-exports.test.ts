@@ -1,3 +1,4 @@
+import { resolveCompilerBinary } from '@aihu/compiler'
 import { migrate } from '@aihu/compiler/codemods/macro-simplification'
 import { migrateStateWrappers } from '@aihu/compiler/codemods/state-wrapper'
 import { migrateTemplateGrammar } from '@aihu/compiler/codemods/template-grammar-v2'
@@ -18,5 +19,9 @@ describe('published codemod entry points', () => {
     expect(
       migrateTemplateGrammar('@template {\n  <button $on.click={save}>Save</button>\n}').rewritten,
     ).toContain('on:click={save}')
+  })
+
+  it('exports the compiler binary resolver from the public entry point', () => {
+    expect(resolveCompilerBinary).toBeTypeOf('function')
   })
 })

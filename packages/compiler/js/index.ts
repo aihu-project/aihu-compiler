@@ -15,7 +15,6 @@ import { compileSpawnBounds, describeSpawnFailure } from './spawn-bounds.ts'
 import { _memoizedSpawn, _seedMemo } from './transform-memo.ts'
 
 export type { CompileEnvelope, CompileEnvelopeOptions } from './envelope.ts'
-
 // Perf — in-process napi compile backend + single-parse envelope (see
 // js/envelope.ts and js/native.ts). `transform()` / `compileToAst()` /
 // `compileRouteMeta()` route memo → native addon → envelope CLI spawn →
@@ -26,6 +25,7 @@ export {
   _resolveCompileBackend,
 } from './envelope.ts'
 export { _getCompilerNativeStateKind, _resetCompilerNative, loadCompilerNative } from './native.ts'
+export { resolveCompilerBinary } from './resolve-binary.ts'
 // Perf — content-addressed memo over the compile spawns (see transform-memo.ts).
 // The SSG prerender re-runs every transform against a second Vite server with
 // identical inputs; the memo turns that whole second pass (and css-engine's
