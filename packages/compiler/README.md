@@ -18,6 +18,36 @@ import { migrateTemplateGrammar } from '@aihu/compiler/codemods/template-grammar
 
 <!-- END_HANDWRITTEN: prose -->
 
+### CSS providers
+
+CSS integration is opt-in. The default plugin behavior continues to discover
+`@aihu/css-engine` when it is installed. A project that uses another CSS
+engine can provide its own complete stylesheet producer without importing the
+legacy engine:
+
+```ts
+import { aihuCompilerPlugin, type AihuCssProvider } from '@aihu/compiler'
+
+const cssProvider: AihuCssProvider = ({ source, id, shadowMode, target, lightScopeId }) => {
+  return myCssEngine.compileAihu({ source, id, shadowMode, target, lightScopeId })
+}
+
+export default {
+  plugins: [aihuCompilerPlugin({ cssProvider })],
+}
+```
+
+The provider receives the source and file id plus the compiler's resolved
+`shadowMode` (`'light'` or `'shadow'`), build `target`, and optional light-DOM
+scope id. A non-empty result is authoritative: it must be the complete
+stylesheet for that SFC, including utility rules, tokens, and authored
+`@style` rules that should ship. The compiler replaces the component's shadow
+stylesheet with it, or sends it through the Vite CSS pipeline for light DOM.
+Return an empty string, `null`, or `undefined` to emit no provider stylesheet.
+
+The explicit provider replaces automatic css-engine resolution for that plugin
+instance, so alternate CSS engines remain independent and opt-in.
+
 ## Install
 
 <!-- BEGIN_AUTOGEN: install -->
@@ -29,7 +59,7 @@ npm install @aihu/compiler
 bun add @aihu/compiler
 ```
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: install -->
 
@@ -40,12 +70,12 @@ bun add @aihu/compiler
 
 | | |
 |---|---|
-| **Version** | `1.3.5` |
+| **Version** | `1.3.6` |
 | **Tier** | D — Compiler — Single-File Component (.aihu) → Web Component |
 | **Published files** | 4 entries |
 | **License** | MIT |
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: stats -->
 
@@ -61,7 +91,7 @@ bun add @aihu/compiler
 | `./codemods/state-wrapper` | `./dist/codemods/state-wrapper.js` | `—` |
 | `./codemods/template-grammar-v2` | `./dist/codemods/template-grammar-v2.js` | `—` |
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: exports -->
 
@@ -88,7 +118,7 @@ bun add @aihu/compiler
 - `@aihu/compiler-native-linux-arm64-gnu` — `1.3.4`
 - `@aihu/compiler-native-win32-x64-msvc` — `1.3.4`
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: deps -->
 
@@ -102,7 +132,7 @@ bun add @aihu/compiler
 - [Macro Vocabulary spec](../../docs/superpowers/specs/2026-05-02-spec-macro-vocabulary.md)
 - [Aihu framework root](../../README.md)
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: see-also -->
 
@@ -113,6 +143,6 @@ bun add @aihu/compiler
 
 MIT — see [LICENSE](../../LICENSE).
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.5`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.6`.</i></sub>
 
 <!-- END_AUTOGEN: license -->

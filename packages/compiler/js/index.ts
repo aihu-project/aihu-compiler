@@ -132,6 +132,22 @@ interface VitePlugin {
  */
 export interface AihuCompilerPluginOptions {
   /**
+   * Optional CSS provider for the compiled SFC.
+   *
+   * When supplied, the provider is the sole source of generated component
+   * CSS. Its non-empty result must be the COMPLETE stylesheet for the SFC:
+   * include utility rules, design tokens, and any authored `@style` rules
+   * that should ship with the component. The compiler replaces its existing
+   * stylesheet body with this result (or routes it through the document CSS
+   * pipeline for `shadowMode: 'light'`). Returning an empty string, `null`,
+   * or `undefined` means that this SFC has no provider stylesheet.
+   *
+   * Without this option, the compiler preserves the legacy automatic,
+   * optional `@aihu/css-engine` integration.
+   */
+  cssProvider?: AihuCssProvider
+
+  /**
    * When `true` (default), components the compiler classified as `'static'`
    * (read from the `// @aihu:island` marker via `_parseIslandMarker()`) are
    * emitted with a minimal HTML-only registration shim that ships **zero**
@@ -188,6 +204,34 @@ export interface AihuCompilerPluginOptions {
    */
   layoutsDir?: string
 }
+
+/**
+ * Context passed to an explicit CSS provider for each compiled SFC.
+ *
+ * `shadowMode` and `target` are resolved compiler values, including their
+ * runtime defaults. A provider can therefore choose a light-DOM stylesheet
+ * strategy or emit target-specific CSS without parsing compiler markers.
+ */
+export interface AihuCssProviderContext {
+  source: string
+  id: string
+  shadowMode: 'light' | 'shadow'
+  target: 'client' | 'server' | 'universal'
+  lightScopeId?: string
+}
+
+/**
+ * Explicit CSS provider contract for `aihuCompilerPlugin`.
+ *
+ * A non-empty return value is authoritative and must be a complete stylesheet
+ * for the SFC, including any authored styles the provider wants to preserve.
+ * It may be synchronous or asynchronous. Empty/absent results skip CSS
+ * folding for that SFC. The provider is an opt-in replacement for the
+ * automatic `@aihu/css-engine` fallback, not an additional stylesheet layer.
+ */
+export type AihuCssProvider = (
+  context: AihuCssProviderContext,
+) => string | null | undefined | Promise<string | null | undefined>
 
 /**
  * Find the `)` matching the `(` at `open`, skipping string literals
@@ -1203,7 +1247,7 @@ export function transform(
 /**
  * Escape a CSS string for safe interpolation inside a JS template literal.
  * The Rust codegen places the authored `@style` body raw inside a backtick
- * literal, so it already assumes no backticks in `@style`. css-engine output
+ * literal, so it already assumes no backticks in `@style`. Provider output
  * (theme tokens + utility rules) likewise never contains backticks, but we
  * escape `\`, `` ` `` and `${` defensively so a future token value can't
  * break out of the literal.
@@ -1215,7 +1259,7 @@ function _escapeForTemplateLiteral(css: string): string {
 }
 
 /**
- * Fold css-engine-produced scoped CSS into a compiled `.aihu` module.
+ * Fold provider-produced scoped CSS into a compiled `.aihu` module.
  *
  * The Rust codegen emits the authored `@style` block (when present) as:
  *
@@ -1226,7 +1270,8 @@ function _escapeForTemplateLiteral(css: string): string {
  *     return ...
  *   }))
  *
- * css-engine's `compileSfc` output is the COMPLETE per-SFC stylesheet:
+ * The default css-engine provider and explicit `AihuCssProvider` implementations
+ * return the COMPLETE per-SFC stylesheet:
  * `:host` theme tokens, the variant-resolved utility-class rules, AND the
  * folded authored `@style` block (under an `authored @style` CSS comment).
  * So it is authoritative — we adopt it as the single shadow `<style>` and
@@ -1237,7 +1282,7 @@ function _escapeForTemplateLiteral(css: string): string {
  *
  *  1. **SFC has an `@style` block** — the Rust codegen already declared
  *     `__style__` with the raw `@style` body. We REPLACE that body with the
- *     css-engine output (which already CONTAINS the `@style` block) so the
+ *     provider output (which already CONTAINS the `@style` block) so the
  *     `@style` rules are not duplicated. The existing `adoptedStyleSheets`
  *     assignment is reused unchanged.
  *
@@ -1286,7 +1331,7 @@ function _replaceDelimitedBody(
 /**
  * Fold css-engine utility CSS into the SERVER target's `__aihu_css__` export.
  *
- * The shadow-DOM sibling of `_foldCssEngineStyles`. That one rewrites the
+ * The shadow-DOM sibling of `_foldCssStyles`. That one rewrites the
  * client's `__style__.replaceSync(...)`; the server target has no `__style__`
  * (`CSSStyleSheet` is a DOM dependency and the Rust codegen elides it), it has
  * `export const __aihu_css__` — the string `__aihu_schild` inlines as `<style>`
@@ -1302,11 +1347,11 @@ function _replaceDelimitedBody(
  * never wired to it.)
  *
  * REPLACES rather than appends, for the same reason shape 1 above does: the
- * css-engine output already contains the authored `@style` rules, so appending
+ * Provider output already contains the authored `@style` rules, so appending
  * would duplicate them.
  *
  * Light-DOM components never reach this — their utilities go through the global
- * cascade via `_foldCssEngineStylesGlobal`, and their prerendered markup is
+ * cascade via `_foldCssStylesGlobal`, and their prerendered markup is
  * covered by the app stylesheet's `@scope([data-a=…])` blocks.
  */
 export function _foldSsrCssExport(compiledCode: string, css: string): string {
@@ -1329,7 +1374,7 @@ export function _foldSsrCssExport(compiledCode: string, css: string): string {
   return `${compiledCode}\nexport const __aihu_css__ = \`${escaped}\`\n`
 }
 
-export function _foldCssEngineStyles(compiledCode: string, css: string): string {
+export function _foldCssStyles(compiledCode: string, css: string): string {
   if (!css.trim()) return compiledCode
   const escaped = _escapeForTemplateLiteral(css)
 
@@ -1466,7 +1511,7 @@ export function _lightScopeId(id: string): string {
  *
  * @internal
  */
-export function _foldCssEngineStylesGlobal(
+export function _foldCssStylesGlobal(
   compiledCode: string,
   css: string,
   id: string,
@@ -1482,6 +1527,12 @@ export function _foldCssEngineStylesGlobal(
   const prelude = `import ${JSON.stringify(virtualId)};\n`
   return { code: prelude + compiledCode, virtualId }
 }
+
+/** @deprecated Use `_foldCssStyles`; retained for internal consumers during the seam rollout. */
+export const _foldCssEngineStyles = _foldCssStyles
+
+/** @deprecated Use `_foldCssStylesGlobal`; retained for internal consumers during the seam rollout. */
+export const _foldCssEngineStylesGlobal = _foldCssStylesGlobal
 
 // ─── v1.0.10a — compiler AST-export hook ─────────────────────────────────────
 //
@@ -1999,9 +2050,26 @@ async function _maybeCompileUtilityCss(
   }
 }
 
+/**
+ * Resolve the stylesheet source for one SFC. An explicit provider is an
+ * opt-in replacement for the legacy css-engine integration; keeping the
+ * fallback in this single dispatcher ensures an alternate provider never
+ * needs to import `@aihu/css-engine` or pay for its optional dependency.
+ */
+async function _resolveCssStyles(
+  provider: AihuCssProvider | undefined,
+  context: AihuCssProviderContext,
+): Promise<string> {
+  if (provider !== undefined) {
+    return (await provider(context)) ?? ''
+  }
+  return _maybeCompileUtilityCss(context.source, context.id, context.lightScopeId)
+}
+
 export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlugin {
   const islandsEnabled = options?.islands !== false
   const shadowMode = options?.shadowMode
+  const cssProvider = options?.cssProvider
   const target = options?.target
   const layoutsDir = options?.layoutsDir ?? 'src/layouts'
 
@@ -2104,6 +2172,10 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
         )?.[1] as 'light' | 'shadow' | undefined
         const impliedShadowDefault = perFileShadowDefault ?? (isLayout ? 'light' : undefined)
         const effectiveShadow = perFileShadow ?? shadowMode ?? impliedShadowDefault
+        // The runtime's default is shadow DOM when no marker or plugin option
+        // is present. Providers receive this resolved value so they never have
+        // to duplicate the compiler's precedence rules.
+        const resolvedShadowMode = effectiveShadow ?? 'shadow'
 
         // Light-DOM leaf flip prep (LDF §10 step 1/3): a deterministic scope
         // id for this component's `data-a` attribute, only when it actually
@@ -2131,16 +2203,17 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
         if (effectiveShadow === 'light') compiled = _globalizeAuthoredStyle(compiled)
         if (isLayout) compiled = _passivizeOutlet(compiled)
 
-        // ── css-engine hook (optional, lazy, no circular dep) ──────────────
-        // @aihu/css-engine depends on @aihu/compiler (for its AST), so the
-        // compiler MUST NOT hard-depend on it. It is declared an OPTIONAL
-        // peerDependency and pulled in ONLY via this guarded dynamic import:
-        // when present, we compile the SFC's utility classes to scoped CSS
-        // and fold it into the component's shadow `<style>`; when absent the
-        // import throws and we no-op (utility classes simply don't emit —
-        // the pre-hook behaviour). This keeps css-engine an opt-in enhancement
-        // with zero dependency cycle.
-        const utilityCss = await _maybeCompileUtilityCss(code, rawId, lightScopeId)
+        // ── CSS provider hook (explicit provider or legacy fallback) ───────
+        // An explicit provider is called directly and never resolves the
+        // optional @aihu/css-engine peer. With no provider, the guarded lazy
+        // css-engine integration remains the compatibility path.
+        const utilityCss = await _resolveCssStyles(cssProvider, {
+          source: code,
+          id: rawId,
+          shadowMode: resolvedShadowMode,
+          target: effectiveTarget ?? 'universal',
+          ...(lightScopeId ? { lightScopeId } : {}),
+        })
         if (utilityCss) {
           if (effectiveShadow === 'light') {
             // Bug 6 — no shadow root → `host.adoptedStyleSheets` is a no-op.
@@ -2148,7 +2221,7 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
             // `.css` import so it lands in `dist/assets/*.css` and reaches the
             // global cascade. The authored `@style` block (if any) still
             // emits via the Rust codegen's normal path and is unaffected.
-            const folded = _foldCssEngineStylesGlobal(compiled, utilityCss, rawId)
+            const folded = _foldCssStylesGlobal(compiled, utilityCss, rawId)
             if (folded) {
               utilityCssStore.set(folded.virtualId, utilityCss)
               compiled = folded.code
@@ -2156,7 +2229,7 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
           } else {
             // `shadowMode: 'shadow'`: fold into the
             // per-component `CSSStyleSheet` adopted by the shadow root.
-            compiled = _foldCssEngineStyles(compiled, utilityCss)
+            compiled = _foldCssStyles(compiled, utilityCss)
             // …and into the SERVER target's `__aihu_css__`, which carries the
             // same rules into the declarative shadow template. A shadow root is
             // style-isolated, so anything missing here paints unstyled until
