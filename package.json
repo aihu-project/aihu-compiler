@@ -19,7 +19,8 @@
     "check:lint": "biome ci .",
     "check:release-manifests": "bun scripts/check-release-manifests.ts --allow-host-only --check-native-history",
     "check:release-manifests:strict": "bun scripts/check-release-manifests.ts",
-    "consumer:smoke": "node scripts/consumer-smoke.mjs"
+    "consumer:smoke": "node scripts/consumer-smoke.mjs",
+    "test:release-contract": "node scripts/release-contract-regression.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",
