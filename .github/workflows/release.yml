@@ -22,6 +22,8 @@ permissions:
 
 env:
   RUSTUP_TOOLCHAIN: '1.95.0'
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+  NPM_CONFIG_USERCONFIG: /tmp/aihu-compiler-npmrc-oidc-only
 
 jobs:
   prepare:
@@ -32,10 +34,10 @@ jobs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       native_release: ${{ steps.mode.outputs.native_release }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
       - run: bun run check:release-manifests
@@ -57,6 +59,7 @@ jobs:
           fi
           if [ "$EVENT_NAME" = push ]; then
             test "$REF_NAME" = "compiler-v$host_version"
+            test "$(git rev-parse "$REF_NAME^{commit}")" = "${{ github.sha }}"
             publish=true
             dry_run=false
           elif [ "$INPUT_PUBLISH" = true ]; then
@@ -105,7 +108,7 @@ jobs:
             artifact: aihu-compile-win32-x64-msvc
             use_cross: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: '1.95.0'
@@ -126,7 +129,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/aihu-compile.exe" "artifact/aihu-compile.exe"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: artifact/
@@ -169,7 +172,7 @@ jobs:
             cdylib: aihu_compiler_native.dll
             use_cross: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: '1.95.0'
@@ -189,7 +192,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item "packages/compiler/src-native/target/${{ matrix.target }}/release/${{ matrix.cdylib }}" "artifact/aihu-compiler-native.${{ matrix.platform }}.node"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aihu-compiler-native-${{ matrix.platform }}
           path: artifact/
@@ -202,8 +205,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
@@ -225,7 +228,7 @@ jobs:
       - name: Verify package contents
         run: npm pack --dry-run
         working-directory: artifact
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aihu-compiler-wasm
           path: artifact/
@@ -239,19 +242,20 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in packages/compiler/npm/*/; do
@@ -261,16 +265,29 @@ jobs:
             test -s "$binary"
             cp "$binary" "$dest"
             [[ "$platform" == win32-* ]] || chmod 0755 "$dest"
+            pack_dir="$RUNNER_TEMP/compiler-pack-$platform"
+            PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
             if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
-              if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
-              (cd "$dir" && npm publish --access public)
+              view_error=$(mktemp)
+              if npm view "$name@$version" version --registry "$NPM_CONFIG_REGISTRY" >/dev/null 2>"$view_error"; then
+                rm -f "$view_error"
+                continue
+              elif grep -Eq 'E404|404 Not Found' "$view_error"; then
+                rm -f "$view_error"
+                node scripts/consumer-smoke.mjs "$pack_path" "$dir"
+                npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
+              else
+                rm -f "$view_error"
+                exit 1
+              fi
             else
               # `npm publish --dry-run` still consults the registry and rejects
               # an already-published version. Packing proves the artifact
               # contents without a registry-side version constraint.
-              (cd "$dir" && npm pack --dry-run)
+              node scripts/consumer-smoke.mjs "$pack_path" "$dir"
             fi
           done
 
@@ -281,35 +298,49 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in packages/compiler/npm-native/*/; do
             platform=$(basename "$dir")
-            binary=$(find "artifacts/aihu-compiler-native-$platform" -name '*.node' -type f -print -quit)
+            binary=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.node')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "artifacts/aihu-compiler-native-$platform")
             test -n "$binary" && test -s "$binary"
             cp "$binary" "$dir/$(basename "$binary")"
+            pack_dir="$RUNNER_TEMP/compiler-native-pack-$platform"
+            PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
             if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
               name=$(node -p "require('./$dir/package.json').name")
               version=$(node -p "require('./$dir/package.json').version")
-              if npm view "$name@$version" version >/dev/null 2>&1; then continue; fi
-              (cd "$dir" && npm publish --access public)
+              view_error=$(mktemp)
+              if npm view "$name@$version" version --registry "$NPM_CONFIG_REGISTRY" >/dev/null 2>"$view_error"; then
+                rm -f "$view_error"
+                continue
+              elif grep -Eq 'E404|404 Not Found' "$view_error"; then
+                rm -f "$view_error"
+                node scripts/consumer-smoke.mjs "$pack_path" "$dir"
+                npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
+              else
+                rm -f "$view_error"
+                exit 1
+              fi
             else
               # See the CLI platform-pack step: this validates contents while
               # allowing a repeatable dry run at an already-published version.
-              (cd "$dir" && npm pack --dry-run)
+              node scripts/consumer-smoke.mjs "$pack_path" "$dir"
             fi
           done
 
@@ -319,27 +350,40 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: aihu-compiler-wasm
           path: artifact
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           version=$(node -p "require('./artifact/package.json').version")
+          PACK_DIR="$RUNNER_TEMP/compiler-wasm-pack" node scripts/verify-pack.mjs artifact
+          pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-wasm-pack")
+          node scripts/consumer-smoke.mjs "$pack_path" artifact
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
-            if npm view "@aihu/compiler-wasm@$version" version >/dev/null 2>&1; then exit 0; fi
-            (cd artifact && npm publish --access public)
+            view_error=$(mktemp)
+            if npm view "@aihu/compiler-wasm@$version" version --registry "$NPM_CONFIG_REGISTRY" >/dev/null 2>"$view_error"; then
+              rm -f "$view_error"
+              exit 0
+            elif grep -Eq 'E404|404 Not Found' "$view_error"; then
+              rm -f "$view_error"
+              npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
+            else
+              rm -f "$view_error"
+              exit 1
+            fi
           else
-            (cd artifact && npm pack --dry-run)
+            :
           fi
 
   publish-compiler:
@@ -368,15 +412,17 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.8'
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - run: printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
       # The platform packages are published by the preceding jobs. Do not
       # freeze a lockfile that predates the version being released.
       - run: bun install --ignore-scripts
@@ -384,14 +430,23 @@ jobs:
       - env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
             version=$(node -p "require('./packages/compiler/package.json').version")
-            if npm view "@aihu/compiler@$version" version >/dev/null 2>&1; then exit 0; fi
-            cd packages/compiler
-            npm publish --access public
+            view_error=$(mktemp)
+            if npm view "@aihu/compiler@$version" version --registry "$NPM_CONFIG_REGISTRY" >/dev/null 2>"$view_error"; then
+              rm -f "$view_error"
+              exit 0
+            elif ! grep -Eq 'E404|404 Not Found' "$view_error"; then
+              rm -f "$view_error"
+              exit 1
+            fi
+            rm -f "$view_error"
+            PACK_DIR="$RUNNER_TEMP/compiler-pack" node scripts/verify-pack.mjs packages/compiler
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.env.PACK_DIR; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))")
+            node scripts/consumer-smoke.mjs "$pack_path" packages/compiler
+            npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
           else
             cd packages/compiler
             npm pack --dry-run

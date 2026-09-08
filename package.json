@@ -18,7 +18,8 @@
     "check": "bun run check:lint && bun run check:release-manifests && bun run typecheck && bun run test:unit && bun run test:rust",
     "check:lint": "biome ci .",
     "check:release-manifests": "bun scripts/check-release-manifests.ts --allow-host-only --check-native-history",
-    "check:release-manifests:strict": "bun scripts/check-release-manifests.ts"
+    "check:release-manifests:strict": "bun scripts/check-release-manifests.ts",
+    "consumer:smoke": "node scripts/consumer-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",
