@@ -30,8 +30,11 @@ jobs:
     outputs:
       publish: ${{ steps.mode.outputs.publish }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
+      native_release: ${{ steps.mode.outputs.native_release }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.3.8'
@@ -46,21 +49,30 @@ jobs:
           set -euo pipefail
           publish=false
           dry_run=true
+          host_version=$(node -p "require('./packages/compiler/package.json').version")
+          native_version=$(node -p "require('./packages/compiler/npm-native/darwin-arm64/package.json').version")
+          native_release=false
+          if [ "$host_version" = "$native_version" ]; then
+            native_release=true
+          fi
           if [ "$EVENT_NAME" = push ]; then
-            version=$(node -p "require('./packages/compiler/package.json').version")
-            test "$REF_NAME" = "compiler-v$version"
+            test "$REF_NAME" = "compiler-v$host_version"
             publish=true
             dry_run=false
           elif [ "$INPUT_PUBLISH" = true ]; then
             publish=true
             dry_run="$INPUT_DRY_RUN"
           fi
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          {
+            echo "publish=$publish"
+            echo "dry_run=$dry_run"
+            echo "native_release=$native_release"
+          } >> "$GITHUB_OUTPUT"
 
   build-cli:
     name: Build CLI ${{ matrix.platform }}
     needs: prepare
+    if: needs.prepare.outputs.native_release == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -124,6 +136,7 @@ jobs:
   build-addon:
     name: Build addon ${{ matrix.platform }}
     needs: prepare
+    if: needs.prepare.outputs.native_release == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -222,6 +235,7 @@ jobs:
   publish-platforms:
     name: Pack CLI platform packages
     needs: [prepare, build-cli]
+    if: needs.prepare.outputs.native_release == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -263,6 +277,7 @@ jobs:
   publish-addons:
     name: Pack addon platform packages
     needs: [prepare, build-addon]
+    if: needs.prepare.outputs.native_release == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -329,7 +344,15 @@ jobs:
 
   publish-compiler:
     name: Pack @aihu/compiler
-    needs: [prepare, publish-platforms, publish-addons, publish-wasm]
+    needs: [prepare, build-cli, build-addon, publish-platforms, publish-addons, publish-wasm]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-cli.result == 'success' || needs.build-cli.result == 'skipped') &&
+      (needs.build-addon.result == 'success' || needs.build-addon.result == 'skipped') &&
+      (needs.publish-platforms.result == 'success' || needs.publish-platforms.result == 'skipped') &&
+      (needs.publish-addons.result == 'success' || needs.publish-addons.result == 'skipped') &&
+      needs.publish-wasm.result == 'success'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
