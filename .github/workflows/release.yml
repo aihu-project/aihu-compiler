@@ -348,11 +348,23 @@ jobs:
     if: >-
       always() &&
       needs.prepare.result == 'success' &&
-      (needs.build-cli.result == 'success' || needs.build-cli.result == 'skipped') &&
-      (needs.build-addon.result == 'success' || needs.build-addon.result == 'skipped') &&
-      (needs.publish-platforms.result == 'success' || needs.publish-platforms.result == 'skipped') &&
-      (needs.publish-addons.result == 'success' || needs.publish-addons.result == 'skipped') &&
-      needs.publish-wasm.result == 'success'
+      needs.publish-wasm.result == 'success' &&
+      (
+        (
+          needs.prepare.outputs.native_release == 'false' &&
+          needs.build-cli.result == 'skipped' &&
+          needs.build-addon.result == 'skipped' &&
+          needs.publish-platforms.result == 'skipped' &&
+          needs.publish-addons.result == 'skipped'
+        ) ||
+        (
+          needs.prepare.outputs.native_release == 'true' &&
+          needs.build-cli.result == 'success' &&
+          needs.build-addon.result == 'success' &&
+          needs.publish-platforms.result == 'success' &&
+          needs.publish-addons.result == 'success'
+        )
+      )
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
