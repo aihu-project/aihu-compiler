@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -16,8 +17,22 @@ type StableVersion = {
 const root = process.cwd()
 const compilerDir = join(root, 'packages', 'compiler')
 const allowHostOnly = process.argv.slice(2).includes('--allow-host-only')
+const checkNativeHistory = process.argv.slice(2).includes('--check-native-history')
 const mode = allowHostOnly ? 'allow-host-only' : 'strict'
 const errors: string[] = []
+
+const nativeSensitivePaths = [
+  'Cargo.toml',
+  'Cargo.lock',
+  'rust-toolchain.toml',
+  'packages/compiler/Cargo.toml',
+  'packages/compiler/Cargo.lock',
+  'packages/compiler/src/',
+  'packages/compiler/src-native/',
+  'packages/compiler/npm/',
+  'packages/compiler/npm-native/',
+  'packages/compiler/scripts/build-native.ts',
+] as const
 
 const platformPackages = [
   ['npm', 'darwin-arm64', '@aihu/compiler-darwin-arm64'],
@@ -121,6 +136,37 @@ if (distinctPlatformVersions.size > 1) {
   errors.push(`platform package versions are mixed: ${[...distinctPlatformVersions].join(', ')}`)
 }
 
+const verifyNativeHistory = (platformVersion: string): void => {
+  const tag = `compiler-v${platformVersion}`
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `refs/tags/${tag}`], {
+      cwd: root,
+      stdio: 'ignore',
+    })
+  } catch {
+    errors.push(`native history check failed: required tag ${tag} does not exist`)
+    return
+  }
+
+  const result = spawnSync(
+    'git',
+    ['diff', '--quiet', `${tag}..HEAD`, '--', ...nativeSensitivePaths],
+    {
+      cwd: root,
+      stdio: 'ignore',
+    },
+  )
+  if (result.error) {
+    errors.push(`native history check failed while running git diff: ${result.error.message}`)
+  } else if (result.status === 1) {
+    errors.push(`native history check failed: native-sensitive files changed since ${tag}`)
+  } else if (result.status !== 0) {
+    errors.push(
+      `native history check failed: git diff exited with status ${result.status ?? 'unknown'}`,
+    )
+  }
+}
+
 if (allowHostOnly && hostSemver !== null) {
   for (const { pkg, version } of platformSemvers) {
     if (version === null) continue
@@ -133,6 +179,18 @@ if (allowHostOnly && hostSemver !== null) {
         `${pkg.name} is ${pkg.version}; platform patch must not be newer than host ${compilerVersion}`,
       )
     }
+  }
+}
+
+if (
+  allowHostOnly &&
+  checkNativeHistory &&
+  compilerVersion !== undefined &&
+  distinctPlatformVersions.size === 1
+) {
+  const platformVersion = platformVersions[0]
+  if (platformVersion !== undefined && compilerVersion !== platformVersion) {
+    verifyNativeHistory(platformVersion)
   }
 }
 

@@ -92,6 +92,57 @@ function run(root: string, ...args: string[]): { status: number; output: string 
   }
 }
 
+function git(root: string, ...args: string[]): void {
+  execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+}
+
+function commitFixture(root: string, message: string): void {
+  git(root, 'add', '.')
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'user.name=Release Manifest Fixture',
+      '-c',
+      'user.email=fixture@example.test',
+      'commit',
+      '-m',
+      message,
+    ],
+    { cwd: root, stdio: 'ignore' },
+  )
+}
+
+function writeNativeHistoryFixture(options: { tag?: boolean; changed?: boolean } = {}): string {
+  const root = writeFixture({ host: '1.3.4', wasm: '1.3.4' })
+  mkdirSync(join(root, 'packages/compiler/src'), { recursive: true })
+  writeFileSync(join(root, 'packages/compiler/src/fixture.ts'), 'export const fixture = true\n')
+  git(root, 'init', '-q')
+  commitFixture(root, 'platform release')
+  if (options.tag !== false) git(root, 'tag', 'compiler-v1.3.4')
+
+  writeFileSync(
+    join(root, 'packages/compiler/package.json'),
+    JSON.stringify({
+      name: '@aihu/compiler',
+      version: '1.3.5',
+      optionalDependencies: Object.fromEntries(platforms.map(([, , name]) => [name, '1.3.4'])),
+    }),
+  )
+  writeFileSync(
+    join(root, 'packages/compiler/npm-wasm/package.json'),
+    JSON.stringify({ name: '@aihu/compiler-wasm', version: '1.3.5' }),
+  )
+  if (options.changed) {
+    writeFileSync(
+      join(root, 'packages/compiler/src/native-history-probe.rs'),
+      'pub const PROBE: bool = true;\n',
+    )
+  }
+  commitFixture(root, 'host release')
+  return root
+}
+
 afterAll(() => rmSync(fixtureRoot, { recursive: true, force: true }))
 
 describe('release manifest checker', () => {
@@ -179,5 +230,31 @@ describe('release manifest checker', () => {
     const strictResult = run(writeFixture({ host: '1.3.4', wasm: '1.3.5' }))
     expect(strictResult.status).not.toBe(0)
     expect(strictResult.output).toContain('@aihu/compiler-wasm is 1.3.5; expected 1.3.4')
+  })
+
+  it('allows an unchanged host-only release when its platform tag exists', () => {
+    const result = run(writeNativeHistoryFixture(), '--allow-host-only', '--check-native-history')
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('mode: allow-host-only')
+  })
+
+  it('rejects host-only releases with native-sensitive changes since the platform tag', () => {
+    const result = run(
+      writeNativeHistoryFixture({ changed: true }),
+      '--allow-host-only',
+      '--check-native-history',
+    )
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.4')
+  })
+
+  it('rejects host-only releases when the platform version tag is missing', () => {
+    const result = run(
+      writeNativeHistoryFixture({ tag: false }),
+      '--allow-host-only',
+      '--check-native-history',
+    )
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('required tag compiler-v1.3.4 does not exist')
   })
 })
