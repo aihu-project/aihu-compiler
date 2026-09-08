@@ -31,8 +31,6 @@ const nativeSensitivePaths = [
   'packages/compiler/js/native.ts',
   'packages/compiler/src/',
   'packages/compiler/src-native/',
-  'packages/compiler/npm/',
-  'packages/compiler/npm-native/',
   'packages/compiler/scripts/build-native.ts',
 ] as const
 

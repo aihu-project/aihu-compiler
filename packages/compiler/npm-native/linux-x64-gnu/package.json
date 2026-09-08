@@ -8,6 +8,9 @@
   "cpu": [
     "x64"
   ],
+  "libc": [
+    "glibc"
+  ],
   "main": "aihu-compiler-native.linux-x64-gnu.node",
   "files": [
     "aihu-compiler-native.linux-x64-gnu.node"
