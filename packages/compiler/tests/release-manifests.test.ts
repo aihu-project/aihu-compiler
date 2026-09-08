@@ -248,6 +248,20 @@ describe('release manifest checker', () => {
     expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.4')
   })
 
+  it('rejects host-only releases that change the JavaScript native ABI boundary', () => {
+    const root = writeNativeHistoryFixture()
+    mkdirSync(join(root, 'packages/compiler/js'), { recursive: true })
+    writeFileSync(
+      join(root, 'packages/compiler/js/native.ts'),
+      'export const changedNativeBoundary = true\n',
+    )
+    commitFixture(root, 'change native JavaScript boundary')
+
+    const result = run(root, '--allow-host-only', '--check-native-history')
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.4')
+  })
+
   it('rejects host-only releases when the platform version tag is missing', () => {
     const result = run(
       writeNativeHistoryFixture({ tag: false }),

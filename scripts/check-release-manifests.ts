@@ -27,6 +27,8 @@ const nativeSensitivePaths = [
   'rust-toolchain.toml',
   'packages/compiler/Cargo.toml',
   'packages/compiler/Cargo.lock',
+  'packages/compiler/js/envelope.ts',
+  'packages/compiler/js/native.ts',
   'packages/compiler/src/',
   'packages/compiler/src-native/',
   'packages/compiler/npm/',
