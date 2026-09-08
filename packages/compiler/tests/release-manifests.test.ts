@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,12 +33,12 @@ type FixtureOptions = {
 }
 
 function writeFixture(options: FixtureOptions = {}): string {
-  const host = options.host ?? '1.3.5'
+  const host = options.host ?? '1.3.7'
   const wasm = options.wasm ?? host
   const versions =
-    options.platformVersions ?? Array.from({ length: platforms.length }, () => '1.3.4')
+    options.platformVersions ?? Array.from({ length: platforms.length }, () => '1.3.5')
   const pins: Record<string, string> = {}
-  for (const [, , name] of platforms) pins[name] = '1.3.4'
+  for (const [, , name] of platforms) pins[name] = '1.3.5'
   for (const [name, version] of Object.entries(options.pinVersions ?? {})) {
     if (version === undefined) delete pins[name]
     else pins[name] = version
@@ -114,24 +114,24 @@ function commitFixture(root: string, message: string): void {
 }
 
 function writeNativeHistoryFixture(options: { tag?: boolean; changed?: boolean } = {}): string {
-  const root = writeFixture({ host: '1.3.4', wasm: '1.3.4' })
+  const root = writeFixture({ host: '1.3.5', wasm: '1.3.5' })
   mkdirSync(join(root, 'packages/compiler/src'), { recursive: true })
   writeFileSync(join(root, 'packages/compiler/src/fixture.ts'), 'export const fixture = true\n')
   git(root, 'init', '-q')
   commitFixture(root, 'platform release')
-  if (options.tag !== false) git(root, 'tag', 'compiler-v1.3.4')
+  if (options.tag !== false) git(root, 'tag', 'compiler-v1.3.5')
 
   writeFileSync(
     join(root, 'packages/compiler/package.json'),
     JSON.stringify({
       name: '@aihu/compiler',
-      version: '1.3.5',
-      optionalDependencies: Object.fromEntries(platforms.map(([, , name]) => [name, '1.3.4'])),
+      version: '1.3.7',
+      optionalDependencies: Object.fromEntries(platforms.map(([, , name]) => [name, '1.3.5'])),
     }),
   )
   writeFileSync(
     join(root, 'packages/compiler/npm-wasm/package.json'),
-    JSON.stringify({ name: '@aihu/compiler-wasm', version: '1.3.5' }),
+    JSON.stringify({ name: '@aihu/compiler-wasm', version: '1.3.7' }),
   )
   if (options.changed) {
     writeFileSync(
@@ -146,39 +146,60 @@ function writeNativeHistoryFixture(options: { tag?: boolean; changed?: boolean }
 afterAll(() => rmSync(fixtureRoot, { recursive: true, force: true }))
 
 describe('release manifest checker', () => {
+  it('keeps the checked-in release version set and optional pins consistent', () => {
+    const read = (relativePath: string) =>
+      JSON.parse(readFileSync(resolve(__dirname, '../', relativePath), 'utf8')) as {
+        name: string
+        version: string
+        optionalDependencies?: Record<string, string>
+      }
+    const compiler = read('package.json')
+    const wasm = read('npm-wasm/package.json')
+    const platformManifests = platforms.map(([kind, directory]) =>
+      read(`${kind}/${directory}/package.json`),
+    )
+
+    expect(compiler.version).toBe('1.3.7')
+    expect(wasm.version).toBe(compiler.version)
+    expect(new Set(platformManifests.map(({ version }) => version))).toEqual(new Set(['1.3.5']))
+    expect(compiler.optionalDependencies).toEqual(
+      Object.fromEntries(platformManifests.map(({ name, version }) => [name, version])),
+    )
+  })
+
   it('accepts a fully synchronized strict release', () => {
-    const result = run(writeFixture({ host: '1.3.4', wasm: '1.3.4' }))
+    const result = run(writeFixture({ host: '1.3.5', wasm: '1.3.5' }))
     expect(result.status).toBe(0)
     expect(result.output).toContain('mode: strict')
-    expect(result.output).toContain('host=1.3.4')
+    expect(result.output).toContain('host=1.3.5')
   })
 
   it('accepts a host-only patch release and prints the selected mode and versions', () => {
     const result = run(writeFixture(), '--allow-host-only')
     expect(result.status).toBe(0)
     expect(result.output).toContain('mode: allow-host-only')
-    expect(result.output).toContain('host=1.3.5')
-    expect(result.output).toContain('platforms=1.3.4')
-    expect(result.output).toContain('wasm=1.3.5')
+    expect(result.output).toContain('host=1.3.7')
+    expect(result.output).toContain('platforms=1.3.5')
+    expect(result.output).toContain('wasm=1.3.7')
   })
 
   it('keeps the default strict mode and rejects the host-only split', () => {
     const result = run(writeFixture())
     expect(result.status).not.toBe(0)
     expect(result.output).toContain('mode: strict')
-    expect(result.output).toContain('@aihu/compiler-darwin-arm64 is 1.3.4; expected 1.3.5')
+    expect(result.output).toContain('@aihu/compiler-darwin-arm64 is 1.3.5; expected 1.3.7')
   })
 
   it('rejects mixed, newer, and cross-major platform versions', () => {
     const mixed = run(
-      writeFixture({ platformVersions: ['1.3.4', ...Array.from({ length: 9 }, () => '1.3.5')] }),
+      writeFixture({ platformVersions: ['1.3.5', ...Array.from({ length: 9 }, () => '1.3.6')] }),
       '--allow-host-only',
     )
     expect(mixed.status).not.toBe(0)
     expect(mixed.output).toContain('platform package versions are mixed')
 
     const newer = run(
-      writeFixture({ platformVersions: Array.from({ length: 10 }, () => '1.3.6') }),
+      writeFixture({ platformVersions: Array.from({ length: 10 }, () => '1.3.8') }),
       '--allow-host-only',
     )
     expect(newer.status).not.toBe(0)
@@ -213,23 +234,23 @@ describe('release manifest checker', () => {
     expect(extraDirectoryResult.output).toContain('extra platform package directory')
 
     const mismatchedPinResult = run(
-      writeFixture({ pinVersions: { '@aihu/compiler-darwin-arm64': '1.3.5' } }),
+      writeFixture({ pinVersions: { '@aihu/compiler-darwin-arm64': '1.3.6' } }),
       '--allow-host-only',
     )
     expect(mismatchedPinResult.status).not.toBe(0)
     expect(mismatchedPinResult.output).toContain(
-      '@aihu/compiler-darwin-arm64 is pinned to 1.3.5; expected 1.3.4',
+      '@aihu/compiler-darwin-arm64 is pinned to 1.3.6; expected 1.3.5',
     )
   })
 
   it('requires WASM to match the host version in both modes', () => {
-    const allowResult = run(writeFixture({ wasm: '1.3.4' }), '--allow-host-only')
+    const allowResult = run(writeFixture({ wasm: '1.3.5' }), '--allow-host-only')
     expect(allowResult.status).not.toBe(0)
-    expect(allowResult.output).toContain('@aihu/compiler-wasm is 1.3.4; expected 1.3.5')
+    expect(allowResult.output).toContain('@aihu/compiler-wasm is 1.3.5; expected 1.3.7')
 
-    const strictResult = run(writeFixture({ host: '1.3.4', wasm: '1.3.5' }))
+    const strictResult = run(writeFixture({ host: '1.3.5', wasm: '1.3.6' }))
     expect(strictResult.status).not.toBe(0)
-    expect(strictResult.output).toContain('@aihu/compiler-wasm is 1.3.5; expected 1.3.4')
+    expect(strictResult.output).toContain('@aihu/compiler-wasm is 1.3.6; expected 1.3.5')
   })
 
   it('allows an unchanged host-only release when its platform tag exists', () => {
@@ -245,7 +266,7 @@ describe('release manifest checker', () => {
       '--check-native-history',
     )
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.4')
+    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.5')
   })
 
   it('rejects host-only releases that change the JavaScript native ABI boundary', () => {
@@ -259,7 +280,7 @@ describe('release manifest checker', () => {
 
     const result = run(root, '--allow-host-only', '--check-native-history')
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.4')
+    expect(result.output).toContain('native-sensitive files changed since compiler-v1.3.5')
   })
 
   it('rejects host-only releases when the platform version tag is missing', () => {
@@ -269,6 +290,6 @@ describe('release manifest checker', () => {
       '--check-native-history',
     )
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain('required tag compiler-v1.3.4 does not exist')
+    expect(result.output).toContain('required tag compiler-v1.3.5 does not exist')
   })
 })

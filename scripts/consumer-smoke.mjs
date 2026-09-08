@@ -28,8 +28,15 @@ execFileSync(
   { cwd: dir, stdio: 'inherit' },
 )
 const installed = resolve(dir, 'node_modules', ...manifest.name.split('/'))
-if (typeof manifest.main === 'string' && /\.(?:node|exe)$/.test(manifest.main)) {
-  if (!existsSync(resolve(installed, manifest.main))) throw new Error('consumer binary is missing')
+const binaryEntry =
+  (typeof manifest.main === 'string' && /\.(?:node|exe)$/.test(manifest.main)
+    ? manifest.main
+    : undefined) ??
+  (Array.isArray(manifest.files)
+    ? manifest.files.find((entry) => /^aihu-compile(?:\.exe)?$/.test(entry))
+    : undefined)
+if (binaryEntry) {
+  if (!existsSync(resolve(installed, binaryEntry))) throw new Error('consumer binary is missing')
 } else {
   execFileSync(
     process.execPath,

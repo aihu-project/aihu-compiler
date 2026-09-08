@@ -1,55 +1,62 @@
 # Releasing @aihu/compiler
 
-The Rust `aihu-compile` binary ships pre-built via GitHub Releases. Consumers
-do not need a Rust toolchain — `bun add @aihu/compiler` triggers the
-postinstall hook in `js/postinstall.ts`, which downloads the binary that
-matches their platform and arch.
+The compiler ships a JavaScript package plus optional platform packages. The
+release workflow is tag-driven and publishes only from a reviewed commit on
+the default branch.
 
-## Tagging a release
+## Release modes
 
-1. `git tag v0.1.0`  (or appropriate semver)
-2. `git push origin v0.1.0`
-3. The `release.yml` workflow triggers automatically. It cross-compiles for
-   mac-arm64, mac-x64, linux-x64, windows-x64 and creates a GitHub Release
-   with all four binaries attached.
-4. Once the release is live, `bun add @aihu/compiler` will trigger
-   the postinstall hook, which downloads the matching binary.
-
-## Dry run (no tag)
+After the release change has landed and its pull request is reviewed, create
+the exact tag that matches the host package version:
 
 ```bash
-gh workflow run release.yml --field tag=v0.0.0-dryrun
+git tag compiler-v1.3.7
+git push origin compiler-v1.3.7
 ```
 
-This builds all 4 binaries as workflow artifacts but does NOT create a
-GitHub Release. Useful for verifying matrix changes — the `release` job
-only runs when the workflow is triggered by an actual `refs/tags/v*` push.
+A host-only patch release keeps the host and WASM packages in lockstep while
+the ten platform packages remain at the most recent native release. For this
+release, `@aihu/compiler` and `@aihu/compiler-wasm` are `1.3.7`, the platform
+packages are `1.3.5`, and the host's optional dependency pins are `1.3.5`.
+The workflow validates this with:
+
+```bash
+bun run check:release-manifests
+```
+
+When the host and platform versions match, the workflow also builds and
+publishes the native CLI and N-API matrices. Do not tag a release until the
+native history check, package allowlists, isolated npm consumers, and E404
+checks pass for every package being released.
 
 ## Local development bypass
 
-If you build from source, set `AIHU_COMPILE_BIN`:
+If you build from source, set `AIHU_COMPILE_BIN` to the local CLI binary:
 
 ```bash
-export AIHU_COMPILE_BIN=$(pwd)/packages/compiler/target/release/aihu-compile
+export AIHU_COMPILE_BIN=$(pwd)/target/release/aihu-compile
 bun install
 ```
 
-The postinstall hook copies that path to `packages/compiler/bin/aihu-compile`
-instead of downloading. On Windows, point at the `.exe`:
+The compiler resolver uses that path before looking for an installed platform
+package. On Windows, point at the `.exe`:
 
 ```powershell
-$env:AIHU_COMPILE_BIN = "$pwd\packages\compiler\target\release\aihu-compile.exe"
+$env:AIHU_COMPILE_BIN = "$pwd\target\release\aihu-compile.exe"
 bun install
 ```
 
-## Verifying a published binary
+## Verifying published packages
 
-After a release lands:
+After a release lands, verify the host and platform package versions before
+testing a local compile:
 
 ```bash
-curl -L -O https://github.com/aihu-project/aihu/releases/latest/download/aihu-compile-linux-x64
-chmod +x aihu-compile-linux-x64
-./aihu-compile-linux-x64 --help
+npm view @aihu/compiler@1.3.7 version
+npm view @aihu/compiler-wasm@1.3.7 version
+npm view @aihu/compiler-linux-x64-gnu@1.3.5 version
+npm view @aihu/compiler-native-linux-x64-gnu@1.3.5 version
+npm install --ignore-scripts @aihu/compiler@1.3.7
 ```
 
 ## Asset naming
@@ -61,25 +68,6 @@ chmod +x aihu-compile-linux-x64
 | linux-x64        | ubuntu-22.04 | x86_64-unknown-linux-gnu     | aihu-compile-linux-x64            |
 | windows-x64      | windows-2022 | x86_64-pc-windows-msvc       | aihu-compile-windows-x64.exe      |
 
-## Failure modes
-
-The postinstall script exits with code 1 (and a clear stderr message naming
-the URL it attempted) on any of:
-
-- Unsupported platform/arch combo
-- Network error fetching the asset
-- Non-2xx HTTP response from GitHub
-- Empty download
-- `AIHU_COMPILE_BIN` set to a path that does not exist
-
-Silent failure is forbidden — a missing binary at install time becomes an
-obvious failure during `bun add`, not a confusing error during `vite build`.
-
-## Future work
-
-- SHA256 sidecar verification (TODO in `js/postinstall.ts`). The release
-  workflow should publish a `<asset>.sha256` next to each binary and the
-  postinstall script should verify the digest before placing the binary
-  on disk.
-- npm-style `optionalDependencies` per-platform packages (current approach
-  trades a slightly worse offline story for a much simpler release matrix).
+The release workflow rejects unsupported platform metadata, missing binaries,
+unexpected tarball files, non-OIDC npm credentials, and published versions
+that are not E404-only before any package is published.
