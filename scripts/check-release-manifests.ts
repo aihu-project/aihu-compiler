@@ -19,9 +19,14 @@ const packageDirs = ['npm', 'npm-native'].flatMap((kind) =>
     .map((entry) => join(compilerDir, kind, entry.name, 'package.json')),
 )
 const platforms = packageDirs.map(readManifest)
+const wasm = readManifest(join(compilerDir, 'npm-wasm', 'package.json'))
 const expectedNames = new Set(platforms.map((pkg) => pkg.name))
 const pinnedNames = new Set(Object.keys(compiler.optionalDependencies ?? {}))
 const errors: string[] = []
+
+if (wasm.version !== compiler.version) {
+  errors.push(`${wasm.name} is ${wasm.version}; expected ${compiler.version}`)
+}
 
 for (const pkg of platforms) {
   if (pkg.version !== compiler.version) {
@@ -45,5 +50,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Compiler release manifests are synchronized: ${compiler.name}@${compiler.version} + ${platforms.length} platform packages.`,
+  `Compiler release manifests are synchronized: ${compiler.name}@${compiler.version} + ${platforms.length} platform packages + ${wasm.name}@${wasm.version}.`,
 )
