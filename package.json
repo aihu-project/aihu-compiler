@@ -13,7 +13,7 @@
     "build": "bun run --cwd packages/compiler build",
     "build:cli": "cargo build --release --manifest-path packages/compiler/Cargo.toml --bin aihu-compile",
     "typecheck": "bun run --cwd packages/compiler typecheck",
-    "test:unit": "bun run --cwd packages/compiler build:native && bun run build:cli && vitest run --config vitest.unit.config.ts",
+    "test:unit": "bun run build && bun run --cwd packages/compiler build:native && bun run build:cli && vitest run --config vitest.unit.config.ts",
     "test:rust": "cargo test --manifest-path packages/compiler/Cargo.toml",
     "check": "bun run check:lint && bun run check:release-manifests && bun run typecheck && bun run test:unit && bun run test:rust",
     "check:lint": "biome ci .",
