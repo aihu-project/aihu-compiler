@@ -20,7 +20,13 @@
 //!   files byte-identical (a plain
 //!   `effect(fn)` over an imported `effect` is legal plain JS today), these
 //!   are honored only when the file also declares at least one binding
-//!   wrapper or naked directive — i.e. when the file IS new-dialect.
+//!   wrapper or naked directive — i.e. when the file IS new-dialect. The
+//!   router guards `beforeNavigate(…)`/`afterNavigate(…)` are the one
+//!   exception: they have no real runtime export an OLD-dialect file could
+//!   have legitimately imported (`sidecar_ts.rs` only ever declares them as
+//!   AMBIENT type-check globals), so a bare call is unambiguously the
+//!   compiler intrinsic and is always recognized, even as the ONLY
+//!   construct in `@state` (aihu-project/aihu#744).
 //! - **Naked directives** (§6.4): `base: Ident`, `shadow: 'light'|'shadow'`,
 //!   `extract: { … }` — lines with a leading directive keyword, a `:`, and NO
 //!   top-level `=` (which would make them the aihu bare typed declaration).
@@ -185,9 +191,19 @@ pub fn scan_state_wrappers(body: &str) -> Result<WrapperScan, CompileError> {
     // Statement calls are honored only in a new-dialect file (see module doc):
     // a lone `effect(fn)` over an imported/auto-imported `effect` in an OLD
     // file keeps compiling verbatim as plain JS.
+    //
+    // `beforeNavigate`/`afterNavigate` are exempted from that gate (see
+    // module doc, aihu-project/aihu#744): they're always recognized, so a
+    // `@state` whose ONLY construct is a router guard still lowers instead
+    // of leaking the raw call into emitted output as an unimported global.
+    let (router_calls, other_statements): (Vec<_>, Vec<_>) = statements
+        .into_iter()
+        .partition(|(mac, _)| matches!(mac, StateMacro::BeforeNavigate { .. } | StateMacro::AfterNavigate { .. }));
+
     let mut all: Vec<(StateMacro, (usize, usize))> = bindings;
+    all.extend(router_calls);
     if has_bindings {
-        all.extend(statements);
+        all.extend(other_statements);
     }
     all.sort_by_key(|(_, (s, _))| *s);
 
