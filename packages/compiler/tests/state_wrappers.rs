@@ -321,6 +321,46 @@ fn old_dialect_navigate_guard_is_unchanged() {
     );
 }
 
+#[test]
+fn after_navigate_alone_still_lowers_with_no_other_wrapper() {
+    // Regression (aihu-project/aihu#744): a `@state` whose ONLY construct is
+    // a bare `afterNavigate(...)` call used to fail the "file is new-dialect"
+    // gate (no other binding wrapper/naked directive present), so the raw
+    // call survived unlowered into emitted output — a reference to a global
+    // that is never actually imported (`afterNavigate` is only ever an
+    // AMBIENT type-check declaration, never a real runtime export), crashing
+    // the component's setup at runtime.
+    let js = emit_src(
+        "@state {\n  afterNavigate(() => {\n    if (!location.hash) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })\n  })\n}\n@template {\n  <div></div>\n}",
+    )
+    .js;
+    assert!(
+        js.contains("__aihuRouter.__router_registerAfterGuard("),
+        "guard must register even with no other @state wrapper\n{js}"
+    );
+    assert!(
+        !js.contains("afterNavigate("),
+        "raw afterNavigate call must not survive into emitted output\n{js}"
+    );
+}
+
+#[test]
+fn before_navigate_alone_still_lowers_with_no_other_wrapper() {
+    // Same gap as above, for the `beforeNavigate` guard.
+    let js = emit_src(
+        "@state {\n  beforeNavigate((to, from, next) => {\n    next()\n  })\n}\n@template {\n  <div></div>\n}",
+    )
+    .js;
+    assert!(
+        js.contains("__aihuRouter.__router_registerBeforeGuard("),
+        "guard must register even with no other @state wrapper\n{js}"
+    );
+    assert!(
+        !js.contains("beforeNavigate("),
+        "raw beforeNavigate call must not survive into emitted output\n{js}"
+    );
+}
+
 // ─── §4.4 — W627 (warning; ratified §9.6) ────────────────────────────────────
 
 #[test]
