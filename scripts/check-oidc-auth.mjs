@@ -1,6 +1,11 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
+// `npm` is a .cmd shim on Windows; Node cannot spawn it without a shell
+// (spawnSync npm ENOENT on the windows-2022 publish jobs).
+const npm = (args) =>
+  execFileSync('npm', args, { encoding: 'utf8', shell: process.platform === 'win32' })
+
 for (const [n, v] of Object.entries(process.env))
   if (
     (v && /^(?:NPM_TOKEN|NODE_AUTH_TOKEN)$/i.test(n)) ||
@@ -19,7 +24,7 @@ for (const c of [
   ['config', 'get', 'globalconfig'],
 ])
   try {
-    paths.add(execFileSync('npm', c, { encoding: 'utf8' }).trim())
+    paths.add(npm(c).trim())
   } catch {}
 for (const p of paths) {
   if (!p || !existsSync(p)) continue
@@ -34,7 +39,7 @@ for (const p of paths) {
       'classic npm authentication was found in npm config; trusted publishing requires OIDC',
     )
 }
-const v = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number)
+const v = npm(['--version']).trim().split('.').map(Number)
 if (v[0] < 11 || (v[0] === 11 && (v[1] < 5 || (v[1] === 5 && v[2] < 1))))
   throw new Error(`npm ${v.join('.')} is below the trusted-publishing minimum 11.5.1`)
 console.log(`verified npm ${v.join('.')}, sanitized config, and OIDC-only auth contract`)

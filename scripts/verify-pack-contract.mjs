@@ -88,6 +88,8 @@ export function verifyPackage(root, packDir) {
     execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir], {
       cwd: root,
       encoding: 'utf8',
+      // `npm` is a .cmd shim on Windows; Node cannot spawn it without a shell.
+      shell: process.platform === 'win32',
     }),
   )
   if (packed.length !== 1) throw new Error('npm pack did not produce exactly one archive')

@@ -5,10 +5,11 @@ import { resolve } from 'node:path'
 const root = resolve(process.argv[2] ?? 'packages/compiler')
 const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 const spec = `${manifest.name}@${manifest.version}`
+// `npm` is a .cmd shim on Windows; Node cannot spawn it without a shell.
 const result = spawnSync(
   'npm',
   ['view', spec, 'version', '--json', '--registry=https://registry.npmjs.org'],
-  { encoding: 'utf8' },
+  { encoding: 'utf8', shell: process.platform === 'win32' },
 )
 const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
 if (result.status === 0) throw new Error(`${spec} already exists on npm; refusing to publish`)
