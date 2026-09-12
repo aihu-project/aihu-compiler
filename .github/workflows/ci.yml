@@ -28,3 +28,40 @@ jobs:
       # commit through the resolver's supported source-checkout fallback.
       - run: cargo build --release --manifest-path packages/compiler/Cargo.toml
       - run: bun run check
+
+  # The release's windows-2022 pack jobs run these scripts, and nothing else
+  # exercised them on Windows until a release: compiler-v1.3.9 lost the win32
+  # packages to `spawnSync npm ENOENT` (npm is a .cmd shim) and compiler-v1.3.10
+  # to GNU tar reading `D:\…` as a remote host. Run the same OIDC guard,
+  # verify-pack and consumer-smoke steps on the win32 platform packages with a
+  # dummy binary, so a Windows-only regression fails the PR instead of a tag.
+  windows-release-scripts:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Prepare OIDC-only npm config
+        run: |
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/aihu-compiler-npmrc-oidc-only" >> "$GITHUB_ENV"
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "$RUNNER_TEMP/aihu-compiler-npmrc-oidc-only"
+      - run: npm install --global npm@11.5.1 --ignore-scripts
+      - run: node scripts/check-oidc-auth.mjs
+      - name: Pack and smoke the win32 platform packages
+        run: |
+          set -euo pipefail
+          for dir in packages/compiler/npm/win32-x64-msvc packages/compiler/npm-native/win32-x64-msvc; do
+            for file in $(node -p "require('./$dir/package.json').files.join(' ')"); do
+              printf 'dummy win32 binary for CI\n' > "$dir/$file"
+            done
+            pack_dir="$RUNNER_TEMP/ci-pack-$(basename "$(dirname "$dir")")"
+            export PACK_DIR="$pack_dir"
+            node scripts/verify-pack.mjs "$dir"
+            pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
+            node scripts/consumer-smoke.mjs "$pack_path" "$dir"
+          done

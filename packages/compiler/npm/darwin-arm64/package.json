@@ -1,6 +1,6 @@
 {
   "name": "@aihu/compiler-darwin-arm64",
-  "version": "1.3.10",
+  "version": "1.3.11",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aihu-project/aihu-compiler.git",
