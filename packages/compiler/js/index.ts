@@ -181,6 +181,14 @@ export interface AihuCompilerPluginOptions {
   shadowMode?: 'light' | 'shadow'
 
   /**
+   * Project-level inputs forwarded to the automatic `@aihu/css-engine`
+   * integration for every SFC (requires a css-engine release that accepts
+   * `compileSfc`'s fourth argument; older releases ignore it). Ignored when
+   * `cssProvider` is set, since the provider owns the whole stylesheet.
+   */
+  css?: AihuCssEngineOptions
+
+  /**
    * Build target threaded to the compiler binary (`--target`). Defaults to the
    * compiler's `universal` target (current behaviour). Set to `'client'` for a
    * browser bundle that must NOT ship the server `__agentBinding` (policy) and
@@ -1931,7 +1939,32 @@ export function _injectAutoWiring(code: string): string {
  * @internal
  */
 interface CssEngineModule {
-  compileSfc(source: string, id?: string, lightScopeId?: string): string
+  compileSfc(
+    source: string,
+    id?: string,
+    lightScopeId?: string,
+    options?: AihuCssEngineOptions,
+  ): string
+}
+
+/**
+ * Project-level `@aihu/css-engine` inputs (`aihuCompilerPlugin({ css })`).
+ * Mirrors css-engine's `CompileSfcOptions`, declared locally for the same
+ * no-type-import reason as {@link CssEngineModule}.
+ */
+export interface AihuCssEngineOptions {
+  /**
+   * Project theme as CSS text: `@theme { … }` blocks or a bare
+   * `--name: value;` list. Replaces the engine's built-in default token
+   * values, which still compile to `var()` fallbacks, so a theme inherited
+   * from the document wins.
+   */
+  theme?: string
+  /**
+   * `false` compiles token references to bare `var(--name)` with no default
+   * fallback, for apps that always supply tokens at `:root`. Default `true`.
+   */
+  hostTokens?: boolean
 }
 
 // Memoised resolution of the optional `@aihu/css-engine` peer. `undefined`
@@ -1999,6 +2032,7 @@ async function _maybeCompileUtilityCss(
   source: string,
   id: string,
   lightScopeId?: string,
+  engineOptions?: AihuCssEngineOptions,
 ): Promise<string> {
   if (_cssEngine === null) return ''
   // Ensure css-engine's bundled `compileToAst` spawns the SAME compiler
@@ -2027,7 +2061,9 @@ async function _maybeCompileUtilityCss(
     if (_cssEngine === null) return ''
   }
   try {
-    return _cssEngine.compileSfc(source, id, lightScopeId)
+    return engineOptions === undefined
+      ? _cssEngine.compileSfc(source, id, lightScopeId)
+      : _cssEngine.compileSfc(source, id, lightScopeId, engineOptions)
   } catch (err) {
     // A css-engine compile failure is non-fatal: fall back to the no-op
     // path (utility classes don't emit) rather than aborting the build.
@@ -2059,17 +2095,19 @@ async function _maybeCompileUtilityCss(
 async function _resolveCssStyles(
   provider: AihuCssProvider | undefined,
   context: AihuCssProviderContext,
+  engineOptions?: AihuCssEngineOptions,
 ): Promise<string> {
   if (provider !== undefined) {
     return (await provider(context)) ?? ''
   }
-  return _maybeCompileUtilityCss(context.source, context.id, context.lightScopeId)
+  return _maybeCompileUtilityCss(context.source, context.id, context.lightScopeId, engineOptions)
 }
 
 export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlugin {
   const islandsEnabled = options?.islands !== false
   const shadowMode = options?.shadowMode
   const cssProvider = options?.cssProvider
+  const cssEngineOptions = options?.css
   const target = options?.target
   const layoutsDir = options?.layoutsDir ?? 'src/layouts'
 
@@ -2207,13 +2245,17 @@ export function aihuCompilerPlugin(options?: AihuCompilerPluginOptions): VitePlu
         // An explicit provider is called directly and never resolves the
         // optional @aihu/css-engine peer. With no provider, the guarded lazy
         // css-engine integration remains the compatibility path.
-        const utilityCss = await _resolveCssStyles(cssProvider, {
-          source: code,
-          id: rawId,
-          shadowMode: resolvedShadowMode,
-          target: effectiveTarget ?? 'universal',
-          ...(lightScopeId ? { lightScopeId } : {}),
-        })
+        const utilityCss = await _resolveCssStyles(
+          cssProvider,
+          {
+            source: code,
+            id: rawId,
+            shadowMode: resolvedShadowMode,
+            target: effectiveTarget ?? 'universal',
+            ...(lightScopeId ? { lightScopeId } : {}),
+          },
+          cssEngineOptions,
+        )
         if (utilityCss) {
           if (effectiveShadow === 'light') {
             // Bug 6 — no shadow root → `host.adoptedStyleSheets` is a no-op.
