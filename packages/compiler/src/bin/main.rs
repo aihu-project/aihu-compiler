@@ -580,8 +580,8 @@ fn main() {
             });
             if !result.manifest_json.is_empty() {
                 // Per-tag filename (`<tag>.agent-manifest.json`), matching the
-                // sibling `<tag>.ts` / `<tag>.route.json` / `<tag>.aihu.ts`
-                // sidecars. FEL-434b: the previous fixed `agent-manifest.json`
+                // sibling `<tag>.ts` / `<tag>.route.json` sidecars. FEL-434b:
+                // the previous fixed `agent-manifest.json`
                 // collided when N>=2 agent components compiled into one output
                 // directory — the second write silently overwrote the first, so
                 // the agent-readiness consumer that reads these sidecars found
@@ -600,17 +600,6 @@ fn main() {
                     eprintln!("error writing '{}': {}", route_path, e);
                     process::exit(1);
                 });
-            }
-            // B3b — also write `<tag>.aihu.ts` next to the JS output when no
-            // explicit --sidecar-out was passed.
-            if sidecar_out.is_none() {
-                if let Some(ref ts) = result.sidecar_ts {
-                    let sidecar_path = format!("{}/{}.aihu.ts", dir, tag_name);
-                    std::fs::write(&sidecar_path, ts).unwrap_or_else(|e| {
-                        eprintln!("error writing sidecar '{}': {}", sidecar_path, e);
-                        process::exit(1);
-                    });
-                }
             }
         }
         None => {

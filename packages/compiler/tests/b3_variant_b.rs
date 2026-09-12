@@ -1364,6 +1364,162 @@ fn b3c_ac16_c500_fires_on_colon_form_binary_stderr() {
     );
 }
 
+// ─── `--out` without `--sidecar-out` writes no stray `.aihu.ts` ─────────────
+//
+// The CLI used to unconditionally drop a `<tag>.aihu.ts` sidecar into the
+// `--out` directory whenever `--sidecar-out` was omitted. Nothing reads that
+// copy — `@aihu/tsc` projects `.aihu` files as virtual TS files via
+// `--sidecar-stdout`, and the Vite plugin uses `--sidecar-out <source-id>.ts`
+// next to the SOURCE, never `--out` — so it was pure clutter in every CLI
+// consumer's build output.
+
+#[test]
+fn aihu_compile_out_dir_without_sidecar_out_writes_no_stray_sidecar() {
+    use std::path::Path;
+    use std::process::Command;
+
+    let pkg_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        pkg_dir.join("target/debug/aihu-compile.exe"),
+        pkg_dir.join("target/debug/aihu-compile"),
+        pkg_dir.join("target/release/aihu-compile.exe"),
+        pkg_dir.join("target/release/aihu-compile"),
+        pkg_dir.join("bin/aihu-compile.exe"),
+        pkg_dir.join("bin/aihu-compile"),
+    ];
+    let bin = candidates.iter().find(|c| c.exists()).cloned();
+
+    let tmp = std::env::temp_dir().join(format!(
+        "aihu-compile-out-test-{}-{}",
+        std::process::id(),
+        "no_sidecar"
+    ));
+    std::fs::create_dir_all(&tmp).expect("create temp src dir");
+    let out_dir = tmp.join("out");
+    let src_file = tmp.join("aihu-widget.aihu");
+    std::fs::write(
+        &src_file,
+        "@state {\n  const [count, setCount] = signal(0)\n}\n@template {\n  <div>{count()}</div>\n}\n",
+    )
+    .expect("write fixture");
+
+    let mut cmd = if let Some(b) = bin {
+        let mut c = Command::new(b);
+        c.args([src_file.to_str().unwrap(), "--out", out_dir.to_str().unwrap()]);
+        c
+    } else {
+        let mut c = Command::new("cargo");
+        c.args([
+            "run",
+            "--quiet",
+            "--bin",
+            "aihu-compile",
+            "--",
+            src_file.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+        ]);
+        c.current_dir(pkg_dir);
+        c
+    };
+
+    let output = cmd.output().expect("aihu-compile spawn failed");
+    assert!(
+        output.status.success(),
+        "aihu-compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        out_dir.join("aihu-widget.ts").exists(),
+        "expected the compiled JS output '<tag>.ts' to exist in --out"
+    );
+    assert!(
+        !out_dir.join("aihu-widget.aihu.ts").exists(),
+        "unexpected stray 'aihu-widget.aihu.ts' sidecar written into --out with no --sidecar-out"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn aihu_compile_explicit_sidecar_out_is_unaffected() {
+    use std::path::Path;
+    use std::process::Command;
+
+    let pkg_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        pkg_dir.join("target/debug/aihu-compile.exe"),
+        pkg_dir.join("target/debug/aihu-compile"),
+        pkg_dir.join("target/release/aihu-compile.exe"),
+        pkg_dir.join("target/release/aihu-compile"),
+        pkg_dir.join("bin/aihu-compile.exe"),
+        pkg_dir.join("bin/aihu-compile"),
+    ];
+    let bin = candidates.iter().find(|c| c.exists()).cloned();
+
+    let tmp = std::env::temp_dir().join(format!(
+        "aihu-compile-out-test-{}-{}",
+        std::process::id(),
+        "explicit_sidecar"
+    ));
+    std::fs::create_dir_all(&tmp).expect("create temp src dir");
+    let out_dir = tmp.join("out");
+    let src_file = tmp.join("aihu-widget.aihu");
+    std::fs::write(
+        &src_file,
+        "@state {\n  const [count, setCount] = signal(0)\n}\n@template {\n  <div>{count()}</div>\n}\n",
+    )
+    .expect("write fixture");
+    let sidecar_path = tmp.join("aihu-widget.aihu.ts");
+
+    let mut cmd = if let Some(b) = bin {
+        let mut c = Command::new(b);
+        c.args([
+            src_file.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--sidecar-out",
+            sidecar_path.to_str().unwrap(),
+        ]);
+        c
+    } else {
+        let mut c = Command::new("cargo");
+        c.args([
+            "run",
+            "--quiet",
+            "--bin",
+            "aihu-compile",
+            "--",
+            src_file.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--sidecar-out",
+            sidecar_path.to_str().unwrap(),
+        ]);
+        c.current_dir(pkg_dir);
+        c
+    };
+
+    let output = cmd.output().expect("aihu-compile spawn failed");
+    assert!(
+        output.status.success(),
+        "aihu-compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        sidecar_path.exists(),
+        "expected the explicit --sidecar-out path to still be written"
+    );
+    assert!(
+        !out_dir.join("aihu-widget.aihu.ts").exists(),
+        "the explicit sidecar path is next to the source, not duplicated into --out"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ─── AC10 — Listener `on:<custom-event>` with payload typing surface ─────────
 //
 // At the lowering level a custom-event listener (e.g. `on:dayjump={…}`) is
