@@ -1,5 +1,5 @@
-use insta::assert_debug_snapshot;
 use aihu_compiler::codegen::signals::resolve_signals;
+use insta::assert_debug_snapshot;
 
 #[test]
 fn single_signal() {
@@ -28,6 +28,30 @@ fn mixed_vars_and_signals() {
 #[test]
 fn empty_script() {
     assert_debug_snapshot!(resolve_signals(""));
+}
+
+#[test]
+fn getter_only_destructure_is_read_only() {
+    let map = resolve_signals("const [rows] = signal([1, 2])");
+    assert!(map.is_reactive("rows"));
+    assert!(map.is_computed("rows"));
+}
+
+#[test]
+fn getter_only_destructure_with_type_param_and_trailing_comma() {
+    let map = resolve_signals(
+        "const [rows] = signal<{ key: string }[]>([])\nconst [key, ] = signal<string>('b')",
+    );
+    assert!(map.is_computed("rows"));
+    assert!(map.is_computed("key"));
+}
+
+#[test]
+fn two_name_destructure_still_has_its_setter() {
+    let map = resolve_signals("const [rows, setRows] = signal([])\nconst [open] = signal(true)");
+    assert_eq!(map.0.get("rows").map(String::as_str), Some("setRows"));
+    assert!(!map.is_computed("rows"));
+    assert!(map.is_computed("open"));
 }
 
 #[test]
