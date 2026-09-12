@@ -222,7 +222,8 @@ jobs:
       - name: Verify package contents
         run: |
           set -euo pipefail
-          PACK_DIR="$RUNNER_TEMP/compiler-wasm-verify" node scripts/verify-pack.mjs artifact
+          export PACK_DIR="$RUNNER_TEMP/compiler-wasm-verify"
+          node scripts/verify-pack.mjs artifact
           pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-wasm-verify")
           node scripts/consumer-smoke.mjs "$pack_path" artifact
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -285,7 +286,8 @@ jobs:
           [[ "$platform" == win32-* ]] || chmod 0755 "$dest"
           node scripts/assert-compiler-platform.mjs "$dir"
           pack_dir="$RUNNER_TEMP/compiler-pack-$platform"
-          PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+          export PACK_DIR="$pack_dir"
+          node scripts/verify-pack.mjs "$dir"
           pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
             node scripts/assert-unpublished.mjs "$dir"
@@ -346,7 +348,8 @@ jobs:
           cp "$binary" "$dir/$(basename "$binary")"
           node scripts/assert-compiler-platform.mjs "$dir"
           pack_dir="$RUNNER_TEMP/compiler-native-pack-$platform"
-          PACK_DIR="$pack_dir" node scripts/verify-pack.mjs "$dir"
+          export PACK_DIR="$pack_dir"
+          node scripts/verify-pack.mjs "$dir"
           pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$pack_dir")
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
             node scripts/assert-unpublished.mjs "$dir"
@@ -381,7 +384,8 @@ jobs:
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
         run: |
           set -euo pipefail
-          PACK_DIR="$RUNNER_TEMP/compiler-wasm-pack" node scripts/verify-pack.mjs artifact
+          export PACK_DIR="$RUNNER_TEMP/compiler-wasm-pack"
+          node scripts/verify-pack.mjs artifact
           pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-wasm-pack")
           node scripts/consumer-smoke.mjs "$pack_path" artifact
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
@@ -439,12 +443,14 @@ jobs:
           set -euo pipefail
           if [ "$PUBLISH" = true ] && [ "$DRY_RUN" != true ]; then
             node scripts/assert-unpublished.mjs packages/compiler
-            PACK_DIR="$RUNNER_TEMP/compiler-pack" node scripts/verify-pack.mjs packages/compiler
+            export PACK_DIR="$RUNNER_TEMP/compiler-pack"
+            node scripts/verify-pack.mjs packages/compiler
             pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.env.PACK_DIR; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))")
             node scripts/consumer-smoke.mjs "$pack_path" packages/compiler
             npm publish "$pack_path" --access public --provenance --registry "$NPM_CONFIG_REGISTRY"
           else
-            PACK_DIR="$RUNNER_TEMP/compiler-pack" node scripts/verify-pack.mjs packages/compiler
+            export PACK_DIR="$RUNNER_TEMP/compiler-pack"
+            node scripts/verify-pack.mjs packages/compiler
             pack_path=$(node -e "const fs=require('node:fs'),path=require('node:path'); const d=process.argv[1]; const xs=fs.readdirSync(d).filter((x)=>x.endsWith('.tgz')); if(xs.length!==1) process.exit(1); process.stdout.write(path.join(d,xs[0]))" "$RUNNER_TEMP/compiler-pack")
             node scripts/consumer-smoke.mjs "$pack_path" packages/compiler
           fi
