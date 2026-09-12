@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 const manifestFields = [
   'name',
@@ -97,14 +97,18 @@ export function verifyPackage(root, packDir) {
   const archives = readdirSync(packDir).filter((name) => name.endsWith('.tgz'))
   if (!existsSync(archive) || archives.length !== 1 || archives[0] !== packed[0].filename)
     throw new Error('pack directory must contain exactly one archive')
+  // Run tar from the archive's directory with a bare file name: Git Bash's GNU
+  // tar reads a `D:\…` path as `host:path` and fails ("Cannot connect to D:"),
+  // which broke the windows-2022 pack jobs of compiler-v1.3.10.
+  const tarIn = { cwd: dirname(archive), encoding: 'utf8' }
   const got = JSON.parse(
-    execFileSync('tar', ['-xOzf', archive, 'package/package.json'], { encoding: 'utf8' }),
+    execFileSync('tar', ['-xOzf', basename(archive), 'package/package.json'], tarIn),
   )
   for (const field of manifestFields)
     if (JSON.stringify(got[field]) !== JSON.stringify(source[field]))
       throw new Error(`manifest field ${field} changed in tarball`)
   assertPublicRegistrySemverDependencies(got)
-  const entries = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' })
+  const entries = execFileSync('tar', ['-tzf', basename(archive)], tarIn)
     .trim()
     .split('\n')
     .filter((entry) => entry && !entry.endsWith('/'))
