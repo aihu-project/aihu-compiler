@@ -821,9 +821,10 @@ const chaptersOf = (bk: string) => []
 fn sidecar_handles_multiline_imports_single_destructure_and_handler_params() {
     // The final three sidecar gaps after 0.9.4: (1) a MULTI-LINE import (the
     // line-at-a-time scan missed these), (2) a single-element destructure
-    // `const [showLine] = signal()` (resolve_signals only seeds 2-element
-    // pairs), (3) an inline event-handler param `(e) => …` (emitted bare it is
-    // implicit-any → TS7006).
+    // `const [showLine] = signal()` (resolve_signals now registers it as a
+    // read-only signal, aihu-compiler#22, so bare reads use the typed
+    // `__aihu_ctx` value view), (3) an inline event-handler param `(e) => …`
+    // (emitted bare it is implicit-any → TS7006).
     let src = r#"@state {
 import { signal } from '@aihu/signals'
 import {
@@ -864,10 +865,15 @@ const openTerm = (e: Event, t: unknown) => {}
         "inline handler must be emitted via __handler(...):\n{sidecar}"
     );
     // #485 step 2: the element-level `if={showLine}` cond is a real `if` head
-    // now (narrowing), not a flat `void (...)` lift.
+    // now (narrowing), not a flat `void (...)` lift. As a registered read-only
+    // signal (#22) its bare read goes through the `__aihu_ctx` value view.
     assert!(
-        sidecar.contains("if (showLine) {"),
+        sidecar.contains("if (__aihu_ctx.showLine) {"),
         "the `if=` cond must emit a real `if` head:\n{sidecar}"
+    );
+    assert!(
+        sidecar.contains("showLine: ReturnType<typeof showLine>"),
+        "a getter-only signal must get the typed value view:\n{sidecar}"
     );
 }
 

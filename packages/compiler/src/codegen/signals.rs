@@ -636,6 +636,16 @@ pub fn resolve_signals(script: &str) -> SignalMap {
                 let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
                 if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
                     map.insert_signal(parts[0], parts[1]);
+                } else if !parts[0].is_empty()
+                    && (parts.len() == 1 || (parts.len() == 2 && parts[1].is_empty()))
+                {
+                    // `const [rows] = signal(...)` / `const [rows, ] = signal(...)` —
+                    // a getter-only destructure is a read-only signal, exactly
+                    // like `computed`. Unregistered, every binding site treated
+                    // `rows` as a plain value: `each` got the getter function
+                    // (rendering zero rows), `{rows.length}` read its arity, and
+                    // `value={key}` assigned the function (aihu-compiler#22).
+                    map.insert_computed(parts[0]);
                 }
             }
         }
