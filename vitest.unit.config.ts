@@ -19,6 +19,7 @@ export default defineConfig({
       'packages/compiler/tests/state-model-sidecar-tsc.test.ts',
       'packages/compiler/tests/strict-templates-sidecar-tsc.test.ts',
       'packages/compiler/tests/tsgen-sidecar-tsc.test.ts',
+      'packages/compiler/tests/action-computed-body-sidecar-tsc.test.ts',
     ],
     passWithNoTests: false,
   },
