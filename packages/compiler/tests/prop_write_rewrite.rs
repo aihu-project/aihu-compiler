@@ -89,12 +89,16 @@ fn todo_mvc_action_lowers_to_set() {
     let js = emit_file("packages/compiler/tests/codemods/fixtures/todo-mvc.expected.aihu");
     assert!(js.contains("filter.set(f)"), "{js}");
     assert!(js.contains("todos.set("), "{js}");
-    // NOT fixed by CO1, and deliberately so (spec §2.2): the RHS read
-    // `...todos` still spreads the getter FUNCTION. That is the separate
-    // bare-read defect; CO1 must not touch reads.
+    // FIXED (issue #31, "bare-read-prop-spread-defect"): the RHS spread read
+    // `...todos` now calls the getter for its value instead of spreading the
+    // getter FUNCTION itself.
     assert!(
-        js.contains("todos.set([...todos,"),
-        "the read side must remain untouched — fixing it is a different slice\n{js}"
+        js.contains("todos.set([...todos(),"),
+        "the RHS spread read must be rewritten to a call\n{js}"
+    );
+    assert!(
+        !js.contains("todos.set([...todos,"),
+        "the pre-fix broken form must not survive\n{js}"
     );
 }
 

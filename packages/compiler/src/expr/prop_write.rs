@@ -6,9 +6,16 @@
 //! emitted function, so an authored `count++` emits an assignment to a `const`
 //! and throws `TypeError: Assignment to constant variable` on first click.
 //!
-//! This module rewrites those writes to the `.set(…)` form. Reads are NOT
-//! touched — `count()` and bare `count` pass through byte-identical (spec
-//! §4.9); the bare-read defect is a separate slice.
+//! This module rewrites those writes to the `.set(…)` form. General reads
+//! are NOT touched — `count()` and bare `count` pass through byte-identical
+//! (spec §4.9). The one exception is a bare `$prop` name SPREAD (`...count`):
+//! that always spreads the getter FUNCTION, never its value, in every
+//! position (array/object literal, call arguments) — never a legitimate
+//! read — so it is rewritten to `...count()` alongside the write rewrite
+//! (issue #31, "bare-read-prop-spread-defect"). Non-spread bare reads
+//! (`f(count)`, `count + 1`, …) remain untouched; making the getter itself
+//! observable that way can be intentional (passing the accessor down), so
+//! rewriting them is out of scope here.
 //!
 //! CONTAINMENT RULE (mirrors `expr/rewrite.rs`): all oxc types stay inside
 //! `src/expr/`. `codegen/emit.rs` sees only `String -> String`.
@@ -56,8 +63,9 @@ use crate::types::CompileError;
 use oxc_ast::ast::{
     AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingIdentifier, Expression,
     ForInStatement, ForOfStatement, ForStatementLeft, IdentifierReference, SimpleAssignmentTarget,
-    Statement, TSType, TSTypeAnnotation, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
-    UpdateExpression, UpdateOperator, VariableDeclaration, VariableDeclarationKind,
+    SpreadElement, Statement, TSType, TSTypeAnnotation, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation, UpdateExpression, UpdateOperator, VariableDeclaration,
+    VariableDeclarationKind,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -436,8 +444,34 @@ impl<'s, 't> PropWriteVisitor<'s, 't> {
         self.targets.props.get(name).copied().unwrap_or(false)
     }
 
-    fn text(&self, start: u32, end: u32) -> &str {
-        &self.src[start as usize..end as usize]
+    /// Re-assemble the source slice `[start, end)`, applying `edits` (already
+    /// collected while walking that slice, e.g. a spread-read rewrite) over
+    /// the raw text instead of returning it byte-identical.
+    ///
+    /// Needed because the assignment-to-a-prop rewrite below replaces the
+    /// WHOLE assignment expression with one `Edit`, built from the RHS's raw
+    /// text spliced into `name.set(…)`. Any edit the
+    /// visitor recorded INSIDE that RHS span (bare `$prop` spreads, or a
+    /// prop write nested in the RHS) would otherwise be silently dropped by
+    /// the top-level "edit fully contained in one already applied" filter in
+    /// `rewrite_prop_writes` — so it must be folded into the RHS text here,
+    /// before the outer edit is built.
+    fn splice(&self, start: u32, end: u32, mut edits: Vec<Edit>) -> String {
+        edits.sort_by_key(|e| (e.start, e.end));
+        let start = start as usize;
+        let end = end as usize;
+        let mut out = String::with_capacity(end - start + 8);
+        let mut copied_to = start;
+        for edit in edits {
+            if edit.start < copied_to || edit.start > end {
+                continue;
+            }
+            out.push_str(&self.src[copied_to..edit.start]);
+            out.push_str(&edit.text);
+            copied_to = edit.end.min(end);
+        }
+        out.push_str(&self.src[copied_to..end]);
+        out
     }
 
     fn is_stmt_position(&self, span: (u32, u32)) -> bool {
@@ -551,14 +585,20 @@ impl<'a> Visit<'a> for PropWriteVisitor<'_, '_> {
 
     // ─── The rewrite ─────────────────────────────────────────────────────────
     fn visit_assignment_expression(&mut self, it: &AssignmentExpression<'a>) {
-        // Always walk the RHS first so nested writes inside it are seen.
+        // Always walk the RHS first so nested writes/reads inside it are seen.
+        let edits_before = self.edits.len();
         self.visit_expression(&it.right);
 
         match &it.left {
             AssignmentTarget::AssignmentTargetIdentifier(id) if self.is_prop(&id.name) => {
                 let name = id.name.to_string();
                 self.record_write(id.span.start, &name);
-                let rhs = self.text(it.right.span().start, it.right.span().end).to_string();
+                // This arm replaces the WHOLE assignment with one edit below,
+                // so any edit the RHS walk just recorded (a bare spread read,
+                // a nested prop write) must be folded into the RHS text now —
+                // see `splice`'s doc comment.
+                let inner = self.edits.split_off(edits_before);
+                let rhs = self.splice(it.right.span().start, it.right.span().end, inner);
                 let stmt = self.is_stmt_position((it.span.start, it.span.end));
 
                 let set_call = match it.operator {
@@ -683,6 +723,25 @@ impl<'a> Visit<'a> for PropWriteVisitor<'_, '_> {
     // `AssignmentExpression.left` and `UpdateExpression.argument`. `count()`
     // and bare `count` pass through byte-identical.
     fn visit_identifier_reference(&mut self, _it: &IdentifierReference<'a>) {}
+
+    // ─── The bare-read-prop-spread fix (issue #31) ──────────────────────────
+    //
+    // `...count` spreads the getter FUNCTION, not its value, in every
+    // position a `SpreadElement` can appear (array/object literal elements,
+    // call arguments) — never a legitimate read, unlike a bare `count` passed
+    // as a plain argument (which may intentionally hand down the accessor).
+    // So this is the one bare-read form rewritten here: `...count` →
+    // `...count()`. A non-identifier spread argument (`...(a || b)`) still
+    // walks normally; nothing else in it is a rewrite candidate today.
+    fn visit_spread_element(&mut self, it: &SpreadElement<'a>) {
+        if let Expression::Identifier(id) = &it.argument {
+            if self.is_prop(&id.name) {
+                self.push_edit(id.span.end, id.span.end, "()".to_string());
+                return;
+            }
+        }
+        walk::walk_spread_element(self, it);
+    }
 }
 
 fn member_base_identifier(target: &AssignmentTarget<'_>) -> Option<String> {
@@ -1024,8 +1083,10 @@ mod tests {
 
     #[test]
     fn reads_are_byte_identical() {
-        // HARD INVARIANT (§4.9). The visitor inspects only
-        // `AssignmentExpression.left` and `UpdateExpression.argument`.
+        // HARD INVARIANT (§4.9), narrowed by issue #31: the visitor inspects
+        // only `AssignmentExpression.left`, `UpdateExpression.argument`, and
+        // (as of #31) a `SpreadElement`'s bare-identifier argument. Every
+        // other read form below has neither shape and stays untouched.
         for src in [
             "count()",
             "count",
@@ -1033,14 +1094,40 @@ mod tests {
             "return count() + 1",
             "const x = count; const y = count()",
             "if (count() > 0) { g(count) }",
+            // `items` is not a `$prop` here, so spreading it is an ordinary
+            // read — only spreading a TRACKED prop name is rewritten (below).
             "[...items, count]",
         ] {
             assert_eq!(rw(src), src, "read form must pass through byte-identical");
         }
         // Rows B/C/D introduce `count()` ONLY inside the value expression they
-        // synthesize — never at an author read site. The RHS read stays bare
-        // (that is the separate bare-read defect, deliberately untouched).
+        // synthesize — never at an author read site. A non-spread RHS read
+        // stays bare (out of scope for #31 — see `bare_prop_spread_...` below
+        // for the read form #31 actually fixes).
         assert_eq!(rw("count = count + 1"), "count.set(count + 1)");
+    }
+
+    #[test]
+    fn bare_prop_spread_is_rewritten_to_a_call() {
+        // The bare-read-prop-spread defect (issue #31): `...count` spreads
+        // the getter FUNCTION, not its value, in every position — never a
+        // legitimate read — so it is rewritten wherever it appears, not just
+        // inside the prop's own write RHS.
+        assert_eq!(rw("f(...count)"), "f(...count())");
+        assert_eq!(rw("[...count, 1]"), "[...count(), 1]");
+        assert_eq!(rw("({ ...count, x: 1 })"), "({ ...count(), x: 1 })");
+        // The headline acceptance case (issue #31's exact repro shape): the
+        // RHS spread of the SAME prop being written composes correctly with
+        // the write rewrite in one pass, instead of the spread edit being
+        // silently dropped by the outer whole-assignment replacement.
+        assert_eq!(rw("count = [...count, x]"), "count.set([...count(), x])");
+        // Spreading a NON-prop identifier is an ordinary read, untouched.
+        assert_eq!(rw("[...items, count]"), "[...items, count]");
+        // Shadowed by an enclosing param: not a prop read at all.
+        assert_eq!(rw_p("f(...count)", "count"), "f(...count)");
+        // A non-identifier spread argument still walks normally; nothing
+        // inside it becomes a rewrite candidate today.
+        assert_eq!(rw("[...(a || b)]"), "[...(a || b)]");
     }
 
     #[test]
