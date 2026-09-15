@@ -699,7 +699,7 @@ impl SidecarCollector<'_> {
                     self.each_counter += 1;
                     out.push(SidecarStmt::Each { binders, list_ts, line, id, body: body_stmts, empty });
                 }
-                TemplateNode::Text(_) => {}
+                TemplateNode::Text(_) | TemplateNode::RawText(_) => {}
             }
         }
         out

@@ -205,6 +205,17 @@ pub(crate) fn emit_node(
                 format!("leaf('{}')", escaped)
             }
         },
+        // GH #856 — `<pre>`/`<textarea>` content: no collapse simulation,
+        // emitted byte-for-byte (decoding entities the same way ordinary
+        // text does, so `&amp;` etc. still resolve).
+        TemplateNode::RawText(s) => {
+            let decoded = decode_html_entities(s);
+            let escaped = decoded
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', "\\n");
+            format!("leaf('{}')", escaped)
+        }
         TemplateNode::Interpolation(id) => {
             let trimmed = id.trim();
             let is_simple_ident = !trimmed.is_empty()
@@ -2310,7 +2321,7 @@ pub(crate) fn apply_emit_lowering_nodes(
                     *expr = lower_emit_calls(expr, event_names);
                 }
             }
-            TemplateNode::Text(_) => {}
+            TemplateNode::Text(_) | TemplateNode::RawText(_) => {}
         }
     }
 }
@@ -2440,7 +2451,10 @@ pub(crate) fn apply_state_write_lowering_nodes(
                     apply_state_write_lowering_nodes(eb, targets, needs_state_helper, needs_prop_helper);
                 }
             }
-            TemplateNode::Interpolation(_) | TemplateNode::HtmlBlock { .. } | TemplateNode::Text(_) => {}
+            TemplateNode::Interpolation(_)
+            | TemplateNode::HtmlBlock { .. }
+            | TemplateNode::Text(_)
+            | TemplateNode::RawText(_) => {}
         }
     }
 }

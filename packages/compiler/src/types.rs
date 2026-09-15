@@ -303,6 +303,11 @@ pub enum TemplateNode {
         children: Vec<TemplateNode>,
     },
     Text(String),
+    /// Static template text inside `<pre>`/`<textarea>`, preserved verbatim
+    /// (no per-line whitespace-collapse simulation) per the HTML content
+    /// model for those two elements — see `normalize_text_node`'s doc
+    /// comment in `codegen/template_emit.rs` for the collapse it opts out of.
+    RawText(String),
     Interpolation(String),
     /// B3 — Variant B block-tag conditional: `{#if cond}...{:else if cond}...{:else}...{/if}`.
     /// `branches` is a non-empty list of `(cond_expr, body)`; the last entry's

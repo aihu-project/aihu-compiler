@@ -56,6 +56,7 @@
 
 use std::collections::BTreeSet;
 
+use super::emit::decode_html_entities;
 use super::signals::{SignalMap, StateNames};
 use super::template_emit::{
     anchor_is_enhanced, attr_name, each_scoped_maps, expr_references_state, find_static_attr,
@@ -343,6 +344,12 @@ impl Emitter {
                     self.lit(&escaped);
                 }
             },
+            // GH #856 — `<pre>`/`<textarea>` content: no collapse simulation.
+            TemplateNode::RawText(s) => {
+                let decoded = decode_html_entities(s);
+                let escaped = escape_text_ct(&decoded);
+                self.lit(&escaped);
+            }
             TemplateNode::Interpolation(id) => self.emit_interpolation(id, sm),
             TemplateNode::Element { tag, attrs, children } => {
                 self.emit_element_with_effects(tag, attrs, children, path, sm, sn, false)
@@ -1399,6 +1406,9 @@ fn attr_survives_lowering(a: &Attr) -> bool {
 fn node_is_text_leaf(node: &TemplateNode, mode: ExprParserMode) -> bool {
     match node {
         TemplateNode::Text(_) => !node_is_dropped(node),
+        // RawText (`<pre>`/`<textarea>` content) is never dropped — a text
+        // node there is always non-empty, per `mark_preformatted`.
+        TemplateNode::RawText(_) => true,
         TemplateNode::Interpolation(_) => true,
         TemplateNode::MacroElement { name, attrs, children } if name == "group" => {
             // A group carrying structural/effect directives wraps in a

@@ -99,6 +99,7 @@ pub(crate) fn collect_component_tags(nodes: &[TemplateNode], out: &mut std::coll
                 }
             }
             TemplateNode::Text(_)
+            | TemplateNode::RawText(_)
             | TemplateNode::Interpolation(_)
             | TemplateNode::HtmlBlock { .. } => {}
         }

@@ -230,7 +230,9 @@ impl From<&TemplateNode> for SfcNodeOwned {
                 attrs: attrs_to_owned(attrs),
                 children: nodes_to_owned(children),
             },
-            TemplateNode::Text(t) => SfcNodeOwned::Text { value: t.clone() },
+            TemplateNode::Text(t) | TemplateNode::RawText(t) => {
+                SfcNodeOwned::Text { value: t.clone() }
+            }
             TemplateNode::Interpolation(e) => SfcNodeOwned::Interpolation { expr: e.clone() },
             TemplateNode::IfBlock { branches } => SfcNodeOwned::IfBlock {
                 branches: branches
