@@ -1,5 +1,28 @@
 # @aihu/compiler
 
+## 1.3.12
+
+### Patch Changes
+
+- [#37](https://github.com/aihu-project/aihu-compiler/pull/37) Preserve `<pre>`/`<textarea>` template text verbatim instead of applying
+  the JSX-style per-line whitespace collapse used for ordinary elements,
+  matching the HTML content-model rule for those two tags (fixes
+  [aihu-project/aihu#856](https://github.com/aihu-project/aihu/issues/856)).
+- [#36](https://github.com/aihu-project/aihu-compiler/pull/36) Add direct test coverage for `--target server` emission.
+- [#34](https://github.com/aihu-project/aihu-compiler/pull/34) Refresh stale README facts and document the programmatic API.
+- [#33](https://github.com/aihu-project/aihu-compiler/pull/33) Rewrite bare `$prop` spreads to getter calls instead of leaving them as
+  stale destructures.
+- [#30](https://github.com/aihu-project/aihu-compiler/pull/30) Add `SECURITY.md`.
+- [#27](https://github.com/aihu-project/aihu-compiler/pull/27) Lower `$action`/`$computed` bodies into real, checkable TS.
+- [#17](https://github.com/aihu-project/aihu-compiler/pull/17) Stop writing a stray `.aihu.ts` sidecar file into `--out`.
+- [#15](https://github.com/aihu-project/aihu-compiler/pull/15) Lower a bare `afterNavigate`/`beforeNavigate` call with no other
+  `@state` wrapper in the same component.
+
+  The `<pre>`/`<textarea>` fix touches the Rust parser/codegen paths that
+  feed the compiled `aihu-compile` binary, so this is a native release:
+  `@aihu/compiler-*` and `@aihu/compiler-native-*` move to 1.3.12 in
+  lockstep with the host package.
+
 ## 1.3.0
 
 ### Minor Changes
