@@ -620,6 +620,24 @@ fn v2_client_build_elides_agent_metadata() {
     );
 }
 
+/// aihu-compiler#32 — `--target server` had no direct test coverage: the fix
+/// unifying `--target client`/`server`/`universal` emission (deleting the
+/// divergent `emit_options_form` server path so `emit_function_form` runs
+/// unconditionally) was verified only by manual inspection. This pins the
+/// actual `--target server` output for a component combining
+/// `$prop`/`$computed`/`$action`, so a future regression in that emission
+/// path (or in `inject_server_binding_registration`'s FEL-440 successor,
+/// `build_server_binding_registration_stmt`) shows up as a snapshot diff
+/// instead of shipping silently.
+#[test]
+fn v2_server_target_emits_prop_action_computed_server_binding() {
+    use aihu_compiler::{compile_full_with_target, types::BuildTarget};
+    let parsed = sfc::parse(v2_exposed_source()).unwrap();
+    let unit = compile_full_with_target(&parsed, BuildTarget::Server).unwrap();
+    let result = emit(&unit, "v2-exposed");
+    insta::assert_snapshot!(result.js);
+}
+
 /// `describe:` is the LLM-facing tool description. It is parsed and validated,
 /// then currently dropped — it appears in no emitted artifact, which is why
 /// every MCP action tool ships with an untyped, undescribed schema.
