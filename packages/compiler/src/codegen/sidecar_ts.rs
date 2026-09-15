@@ -270,6 +270,13 @@ pub(crate) fn emit_sidecar_ts(
         ""
     };
 
+    // #14 — `$computed`/`$action` bodies lower into real, checkable TS at
+    // their own `.aihu` source line (see `lower_macro_bodies`) instead of the
+    // honest-`any` fallback every other collection kind still gets. Computed
+    // before `preamble_line` so `macro_binding_decls` can skip the `any`
+    // fallback for exactly the entries that got a real declaration.
+    let (lowered_macro_lines, lowered_macro_names) = lower_macro_bodies(script);
+
     let preamble_line = format!(
         "{} declare function __handler(h: (...args: any[]) => any): void; {} {} {}{}{}{} \
          // {}.aihu type-check sidecar (generated, line-preserving)",
@@ -279,7 +286,7 @@ pub(crate) fn emit_sidecar_ts(
         gx_type_decls,
         each_helper,
         strict_type_decls,
-        macro_binding_decls(script, governed_data),
+        macro_binding_decls(script, governed_data, &lowered_macro_names),
         tag_name
     );
 
@@ -340,7 +347,9 @@ pub(crate) fn emit_sidecar_ts(
             // correctly, and the name never gets declared (every template reference
             // to it then false-errors as undefined). Lowering it to `let name: T = …`
             // keeps the line — and its length, so the mapping still holds.
-            let text = if macro_lines.contains(&n) {
+            let text = if let Some(decl) = lowered_macro_lines.get(&n) {
+                decl.clone()
+            } else if macro_lines.contains(&n) {
                 String::new()
             } else {
                 transform_bare_declaration(text)
@@ -1128,6 +1137,232 @@ fn macro_line_set(script: &str) -> std::collections::BTreeSet<usize> {
     out
 }
 
+/// Byte offsets, within a `$computed`/`$action` macro's `{ … }` payload
+/// (exclusive of the outer braces), of each top-level entry's key start —
+/// i.e. an identifier that sits right after the opening `{` or after a
+/// top-level `,`, AND is immediately followed by `:`. That "entry start"
+/// gate is what keeps this from misreading a ternary's `cond ? a : b` or an
+/// arrow's `(x) => x` as a second entry: neither `a`/`b` nor `x` sits at an
+/// entry-start position, only a real top-level `key:` does.
+fn top_level_entry_starts(body: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut at_entry_start = true;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'"' | b'\'' | b'`' => {
+                let q = c;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == q {
+                        break;
+                    }
+                    i += 1;
+                }
+                at_entry_start = false;
+            }
+            b'(' => depth_paren += 1,
+            b')' => depth_paren = (depth_paren - 1).max(0),
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace = (depth_brace - 1).max(0),
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket = (depth_bracket - 1).max(0),
+            b',' if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                at_entry_start = true;
+            }
+            _ if c.is_ascii_whitespace() => {}
+            _ if depth_paren == 0
+                && depth_brace == 0
+                && depth_bracket == 0
+                && at_entry_start
+                && (c.is_ascii_alphabetic() || c == b'_' || c == b'$') =>
+            {
+                let start = i;
+                let mut j = i;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$')
+                {
+                    j += 1;
+                }
+                let mut k = j;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                at_entry_start = false;
+                if k < bytes.len() && bytes[k] == b':' {
+                    out.push(start);
+                }
+            }
+            _ => {
+                at_entry_start = false;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Byte span `(start, end)` of each `$computed`/`$action` collection macro's
+/// `{ … }` payload in `script` (exclusive of the braces), in source order.
+/// Mirrors the macro detection in `macro_line_set`, narrowed to the two
+/// collection kinds `lower_macro_bodies` lowers into real TS.
+fn collection_macro_payload_spans(
+    script: &str,
+) -> Vec<(crate::types::CollectionKind, usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < script.len() {
+        let nl = script[i..].find('\n').map(|r| i + r).unwrap_or(script.len());
+        let line = script[i..nl].trim_start();
+        let line_start = i + (script[i..nl].len() - line.len());
+        if let Some(rest) = line.strip_prefix('$') {
+            let kind = if let Some(after) = rest.strip_prefix("computed") {
+                after
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c == ':' || c.is_whitespace())
+                    .then_some(crate::types::CollectionKind::Computed)
+            } else if let Some(after) = rest.strip_prefix("action") {
+                after
+                    .chars()
+                    .next()
+                    .map_or(true, |c| c == ':' || c.is_whitespace())
+                    .then_some(crate::types::CollectionKind::Action)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                if let Some(brace_rel) = script[line_start..].find('{') {
+                    let p = line_start + brace_rel;
+                    // Only within the macro's own line or the next (mirrors
+                    // `macro_line_set`'s same-line/next-line payload rule).
+                    if script[line_start..p].bytes().filter(|&b| b == b'\n').count() <= 1 {
+                        if let Some(close) =
+                            crate::parser::state_macros::find_brace_close_js(script, p + 1)
+                        {
+                            out.push((kind, p + 1, close));
+                        }
+                    }
+                }
+            }
+        }
+        i = nl + 1;
+    }
+    out
+}
+
+/// Lowers each `$computed`/`$action` entry's authored body into a real,
+/// single-line TS declaration placed at the entry's OWN `.aihu` source line
+/// — so a type error inside the body cites that line, the same treatment
+/// `$prop` (synthetic accessor) and loop aliases already get, instead of the
+/// honest-`any` fallback `macro_binding_decls` uses for every other
+/// collection kind (#14).
+///
+/// Computed entries lower to an ACCESSOR (`let name = () => (body);`),
+/// matching `$prop`'s accessor typing and the real `computed(() => body)`
+/// runtime shape (see `state_emit.rs`) — `ReturnType<typeof name>` in
+/// `__aihu_ctx` then derives the entry's true value type with no parallel
+/// table.
+///
+/// Action entries lower to a `function` DECLARATION, not `let name = (args)
+/// => {}`: `state_emit.rs` already lowers `$action` to a hoisted `function`
+/// at runtime specifically so one action can call another declared later in
+/// the same `@state` block. An arrow `let` isn't hoisted, so it would
+/// falsely TS2448 ("used before its declaration") on that legal, common
+/// shape — a regression this fix must not introduce.
+///
+/// Returns the per-line replacement text (several entries sharing a source
+/// line share one sidecar line, matching the convention already used for
+/// lifted template expressions) and the set of entry names that got a real
+/// declaration, so `macro_binding_decls` knows which names to skip.
+///
+/// Falls back to leaving a kind's entries entirely un-lowered (the caller's
+/// `any` fallback then applies, as before) when the raw-text entry scan
+/// disagrees with the parser about how many entries a macro has — staying
+/// honestly `any` beats risking a declaration on the wrong line.
+fn lower_macro_bodies(
+    script: &str,
+) -> (std::collections::BTreeMap<usize, String>, std::collections::HashSet<String>) {
+    use crate::parser::state_macros::{
+        arrow_args, arrow_async_prefix, arrow_body, arrow_body_spliceable, running_code,
+    };
+    use crate::types::{CollectionKind, StateMacro};
+
+    let mut lines: std::collections::BTreeMap<usize, String> = std::collections::BTreeMap::new();
+    let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let macros = crate::parser::state_macros::parse_state_macros(script).unwrap_or_default();
+    let spans = collection_macro_payload_spans(script);
+
+    for kind in [CollectionKind::Computed, CollectionKind::Action] {
+        let entries: Vec<&crate::types::CollectionEntry> = macros
+            .iter()
+            .filter_map(|m| match m {
+                StateMacro::Collection { kind: k, entries } if *k == kind => Some(entries),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let starts: Vec<usize> = spans
+            .iter()
+            .filter(|(k, _, _)| *k == kind)
+            .flat_map(|(_, s, e)| {
+                let s = *s;
+                top_level_entry_starts(&script[s..*e]).into_iter().map(move |off| s + off)
+            })
+            .collect();
+        if entries.len() != starts.len() {
+            continue;
+        }
+        for (entry, &abs_off) in entries.iter().zip(starts.iter()) {
+            let Some(thunk) = running_code(entry) else { continue };
+            let decl = match kind {
+                CollectionKind::Computed => {
+                    let async_prefix = arrow_async_prefix(thunk);
+                    let body = match arrow_body_spliceable(thunk) {
+                        Some(b) if b.trim_start().starts_with('{') => b,
+                        Some(b) => format!("({})", b),
+                        None => format!("({})", thunk.trim()),
+                    };
+                    format!("let {name} = {async_prefix}() => {body};", name = entry.name)
+                }
+                CollectionKind::Action => {
+                    let async_prefix = arrow_async_prefix(thunk);
+                    let args = arrow_args(thunk).unwrap_or_default();
+                    let body = arrow_body(thunk).unwrap_or_default();
+                    format!(
+                        "{async_prefix}function {name}({args}) {{ {body} }}",
+                        name = entry.name
+                    )
+                }
+                _ => unreachable!("kind is restricted to Computed | Action above"),
+            };
+            let line = newlines_before(script, abs_off);
+            let decl = to_single_line(&decl);
+            lines
+                .entry(line)
+                .and_modify(|existing| {
+                    existing.push(' ');
+                    existing.push_str(&decl);
+                })
+                .or_insert(decl);
+            names.insert(entry.name.clone());
+        }
+    }
+    (lines, names)
+}
+
 /// Declarations for every binding a `$macro` introduces, as a single physical
 /// line appended to the preamble (the macro's own lines are blanked — see
 /// `macro_line_set`).
@@ -1139,9 +1374,15 @@ fn macro_line_set(script: &str) -> std::collections::BTreeSet<usize> {
 /// (`props.title()`), so a template reads a prop as `language()`. Typing the
 /// binding as a plain `T` made every such call a `TS2349` "not callable".
 ///
-/// The other collections bind functions whose types would have to be inferred
-/// from macro bodies that aren't yet lowered to TS, so they are honestly `any`
-/// for now rather than confidently wrong.
+/// `$computed`/`$action` entries whose body `lower_macro_bodies` already
+/// lowered into a real, checkable declaration (see `lowered` below) are
+/// skipped here — they get their true inferred type from that declaration,
+/// not this `any` fallback.
+///
+/// The remaining collections (`$resource`, `$effect`, `$lifecycle`, …) bind
+/// functions whose types would have to be inferred from macro bodies that
+/// aren't yet lowered to TS, so they are honestly `any` for now rather than
+/// confidently wrong.
 ///
 /// Module-scope `let`/`const` (not `declare const`): a binding may shadow a DOM
 /// global (`name`, `open`, `status`, `close`), and an ambient re-declaration of
@@ -1154,7 +1395,11 @@ fn macro_line_set(script: &str) -> std::collections::BTreeSet<usize> {
 /// as a VALUE (not the accessor form): the lifted template expressions read
 /// the RAW authored `route.data.…` member chains (the `route()` call rewrite
 /// is a JS-emit concern), so the value typing is what makes them checkable.
-fn macro_binding_decls(script: &str, governed: Option<&crate::types::DataDecl>) -> String {
+fn macro_binding_decls(
+    script: &str,
+    governed: Option<&crate::types::DataDecl>,
+    lowered: &std::collections::HashSet<String>,
+) -> String {
     let macros = crate::parser::state_macros::parse_state_macros(script).unwrap_or_default();
     let mut decls: Vec<String> = Vec::new();
     let mut declared_route = false;
@@ -1201,6 +1446,11 @@ fn macro_binding_decls(script: &str, governed: Option<&crate::types::DataDecl>) 
                         if !decls.contains(&decl) {
                             decls.push(decl);
                         }
+                    }
+                }
+                crate::types::CollectionKind::Computed | crate::types::CollectionKind::Action => {
+                    if !lowered.contains(name) {
+                        decls.push(format!("let {}: any = null as any;", name));
                     }
                 }
                 _ => decls.push(format!("let {}: any = null as any;", name)),
@@ -1634,5 +1884,81 @@ mod sidecar_alias_tests {
         // Empty / punctuation-only parts contribute nothing (no panic).
         assert!(idents("[]").is_empty());
         assert!(idents("").is_empty());
+    }
+}
+
+// #14 — `$computed`/`$action` bodies lower to real, line-positioned TS.
+#[cfg(test)]
+mod macro_body_lowering_tests {
+    use super::{lower_macro_bodies, top_level_entry_starts};
+
+    #[test]
+    fn computed_entry_lowers_to_an_accessor_on_its_own_line() {
+        let script = "$computed: {\n  double: () => count() * 2,\n}\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(names.contains("double"));
+        // Line 1 (0-based) is `  double: () => count() * 2,`.
+        assert_eq!(lines.get(&1).unwrap(), "let double = () => (count() * 2);");
+    }
+
+    #[test]
+    fn bare_non_arrow_computed_entry_still_lowers() {
+        // `$computed` entries may skip the arrow head entirely.
+        let script = "$computed: {\n  double: count() * 2,\n}\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(names.contains("double"));
+        assert_eq!(lines.get(&1).unwrap(), "let double = () => (count() * 2);");
+    }
+
+    #[test]
+    fn action_entry_lowers_to_a_hoisted_function_declaration() {
+        let script = "$action: {\n  increment: (n: number) => { count = count + n },\n}\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(names.contains("increment"));
+        assert_eq!(
+            lines.get(&1).unwrap(),
+            "function increment(n: number) { count = count + n }"
+        );
+    }
+
+    #[test]
+    fn wrapped_action_entry_uses_its_handler_key() {
+        let script =
+            "$action: {\n  reset: { handler: () => { count = 0 }, describe: 'reset it' },\n}\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(names.contains("reset"));
+        assert_eq!(lines.get(&1).unwrap(), "function reset() { count = 0 }");
+    }
+
+    #[test]
+    fn multiple_entries_sharing_a_line_share_one_sidecar_line() {
+        let script = "$computed: { a: () => 1, b: () => 2 }\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(names.contains("a") && names.contains("b"));
+        let line = lines.get(&0).unwrap();
+        assert!(line.contains("let a = () => (1);"));
+        assert!(line.contains("let b = () => (2);"));
+    }
+
+    #[test]
+    fn other_collection_kinds_are_left_untouched() {
+        let script = "$resource: {\n  data: () => fetchData(),\n}\n";
+        let (lines, names) = lower_macro_bodies(script);
+        assert!(lines.is_empty());
+        assert!(names.is_empty());
+    }
+
+    // A ternary's `:` (`cond ? a : b`) sits mid-value, not right after `{` or
+    // a top-level `,` — it must never be mistaken for a second entry key.
+    #[test]
+    fn ternary_colon_inside_a_bare_entry_is_not_a_second_entry() {
+        let body = " flag: cond ? a : b ";
+        assert_eq!(top_level_entry_starts(body).len(), 1);
+    }
+
+    #[test]
+    fn object_shorthand_value_with_nested_colon_is_one_entry() {
+        let body = " cfg: { a: 1, b: 2 } ";
+        assert_eq!(top_level_entry_starts(body).len(), 1);
     }
 }
