@@ -471,7 +471,7 @@ pub fn state_staleness_warnings(script: &str, template_ast: &[TemplateNode]) -> 
                         walk(eb, bare_set, bare_lets, written, reads);
                     }
                 }
-                TemplateNode::Text(_) => {}
+                TemplateNode::Text(_) | TemplateNode::RawText(_) => {}
             }
         }
     }
@@ -848,6 +848,7 @@ fn validate_component_tags(nodes: &[TemplateNode]) -> Result<(), CompileError> {
                 }
             }
             TemplateNode::Text(_)
+            | TemplateNode::RawText(_)
             | TemplateNode::Interpolation(_)
             | TemplateNode::HtmlBlock { .. } => {}
         }
@@ -935,6 +936,7 @@ fn validate_ref_gating(nodes: &[TemplateNode]) -> Result<(), CompileError> {
                 }
             }
             TemplateNode::Text(_)
+            | TemplateNode::RawText(_)
             | TemplateNode::Interpolation(_)
             | TemplateNode::HtmlBlock { .. } => {}
         }

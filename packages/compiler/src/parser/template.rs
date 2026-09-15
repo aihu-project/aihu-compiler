@@ -83,6 +83,69 @@ fn check_c401(attrs: &[Attr]) -> Option<CompileError> {
     None
 }
 
+/// HTML tree-construction rule for `<pre>`/`<textarea>` (GH #856): their
+/// content model preserves whitespace verbatim instead of the JSX-style
+/// collapse `normalize_text_node` applies to ordinary template text, so
+/// every `Text` node under one of these elements is relabeled `RawText`
+/// (recursively — `white-space: pre` is inherited by descendants).
+///
+/// The one conventional trim: a single U+000A LINE FEED immediately after
+/// the opening tag is ignored, matching how browsers parse `<pre>\ncode`
+/// as just `code` — but only when that leading newline sits in the
+/// element's OWN first child, not one belonging to a nested element.
+fn mark_preformatted(mut children: Vec<TemplateNode>) -> Vec<TemplateNode> {
+    if let Some(TemplateNode::Text(s)) = children.first() {
+        match s.strip_prefix('\n') {
+            Some(rest) if rest.is_empty() => {
+                children.remove(0);
+            }
+            Some(rest) => {
+                children[0] = TemplateNode::Text(rest.to_string());
+            }
+            None => {}
+        }
+    }
+    children.into_iter().map(to_raw_text).collect()
+}
+
+fn to_raw_text(node: TemplateNode) -> TemplateNode {
+    match node {
+        TemplateNode::Text(s) => TemplateNode::RawText(s),
+        TemplateNode::Element { tag, attrs, children } => TemplateNode::Element {
+            tag,
+            attrs,
+            children: children.into_iter().map(to_raw_text).collect(),
+        },
+        TemplateNode::MacroElement { name, attrs, children } => TemplateNode::MacroElement {
+            name,
+            attrs,
+            children: children.into_iter().map(to_raw_text).collect(),
+        },
+        TemplateNode::IfBlock { branches } => TemplateNode::IfBlock {
+            branches: branches
+                .into_iter()
+                .map(|(cond, body)| (cond, body.into_iter().map(to_raw_text).collect()))
+                .collect(),
+        },
+        TemplateNode::EachBlock {
+            list_expr,
+            item_alias,
+            idx_alias,
+            key_expr,
+            body,
+            empty_body,
+        } => TemplateNode::EachBlock {
+            list_expr,
+            item_alias,
+            idx_alias,
+            key_expr,
+            body: body.into_iter().map(to_raw_text).collect(),
+            empty_body: empty_body.map(|b| b.into_iter().map(to_raw_text).collect()),
+        },
+        other => other,
+    }
+}
+
 pub fn parse_template(input: &str) -> Result<Vec<TemplateNode>, CompileError> {
     let mut parser = Parser { input, pos: 0 };
     let nodes = parser.parse_nodes(None)?;
@@ -449,6 +512,12 @@ impl<'a> Parser<'a> {
             });
         }
 
+        let children = if tag == "pre" || tag == "textarea" {
+            mark_preformatted(children)
+        } else {
+            children
+        };
+
         Ok(TemplateNode::Element {
             tag,
             attrs,
@@ -761,7 +830,7 @@ fn tag_of(node: &TemplateNode) -> String {
     match node {
         TemplateNode::Element { tag, .. } => tag.clone(),
         TemplateNode::MacroElement { name, .. } => name.clone(),
-        TemplateNode::Text(_) => "#text".to_string(),
+        TemplateNode::Text(_) | TemplateNode::RawText(_) => "#text".to_string(),
         TemplateNode::Interpolation(_) => "{…}".to_string(),
         TemplateNode::IfBlock { .. } => "if-chain".to_string(),
         TemplateNode::EachBlock { .. } => "each".to_string(),

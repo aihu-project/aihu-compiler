@@ -1,4 +1,5 @@
 use aihu_compiler::parser::template::parse_template;
+use aihu_compiler::types::TemplateNode;
 
 #[test]
 fn element_static_attrs() {
@@ -80,6 +81,76 @@ fn error_unknown_directive() {
 fn error_v_if_directive() {
     let result = parse_template(r#"<div v-if="x"></div>"#);
     insta::assert_debug_snapshot!(result);
+}
+
+// GH #856 — `<pre>` (and `<textarea>`, same HTML content-model rule) must
+// preserve static template text verbatim instead of the JSX-style
+// per-line whitespace collapse applied to ordinary template text.
+#[test]
+fn pre_content_preserved_verbatim() {
+    let src = "<pre>=====\n===       Every<b>dom</b>\n=====     router for many domains</pre>";
+    let nodes = parse_template(src).unwrap();
+    assert_eq!(nodes.len(), 1);
+    let TemplateNode::Element { tag, children, .. } = &nodes[0] else {
+        panic!("expected an element");
+    };
+    assert_eq!(tag, "pre");
+    assert_eq!(children.len(), 3);
+
+    assert_eq!(
+        children[0],
+        TemplateNode::RawText("=====\n===       Every".to_string())
+    );
+
+    let TemplateNode::Element { tag: b_tag, children: b_children, .. } = &children[1] else {
+        panic!("expected the <b> element");
+    };
+    assert_eq!(b_tag, "b");
+    assert_eq!(b_children, &[TemplateNode::RawText("dom".to_string())]);
+
+    assert_eq!(
+        children[2],
+        TemplateNode::RawText("\n=====     router for many domains".to_string())
+    );
+}
+
+#[test]
+fn pre_strips_single_leading_newline_after_open_tag() {
+    // HTML tree-construction rule: exactly one U+000A right after `<pre>`'s
+    // (or `<textarea>`'s) opening tag is ignored — everything else in the
+    // element stays verbatim.
+    let nodes = parse_template("<pre>\nfoo\nbar</pre>").unwrap();
+    let TemplateNode::Element { children, .. } = &nodes[0] else {
+        panic!("expected an element");
+    };
+    assert_eq!(children, &[TemplateNode::RawText("foo\nbar".to_string())]);
+}
+
+#[test]
+fn textarea_content_preserved_verbatim() {
+    let nodes = parse_template("<textarea>  keep  spaces\nand lines  </textarea>").unwrap();
+    let TemplateNode::Element { tag, children, .. } = &nodes[0] else {
+        panic!("expected an element");
+    };
+    assert_eq!(tag, "textarea");
+    assert_eq!(
+        children,
+        &[TemplateNode::RawText("  keep  spaces\nand lines  ".to_string())]
+    );
+}
+
+#[test]
+fn non_pre_whitespace_collapse_is_unchanged() {
+    // Regression guard: ordinary elements must still collapse per-line
+    // whitespace the way they did before the `<pre>`/`<textarea>` fix.
+    let nodes = parse_template("<p>\n    hello   world\n  </p>").unwrap();
+    let TemplateNode::Element { children, .. } = &nodes[0] else {
+        panic!("expected an element");
+    };
+    assert_eq!(
+        children,
+        &[TemplateNode::Text("\n    hello   world\n  ".to_string())]
+    );
 }
 
 #[test]

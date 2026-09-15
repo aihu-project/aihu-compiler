@@ -1166,3 +1166,78 @@ fn non_ascii_string_literals_in_expressions_are_not_latin1_mangled() {
         assert!(!js.contains(bad), "latin-1 mojibake `{bad}` leaked into:\n{js}");
     }
 }
+
+#[test]
+fn pre_content_emits_verbatim_static_text() {
+    // GH #856 (aihu-project/aihu#856) — the exact repro from the filed
+    // issue: static template text inside `<pre>` was whitespace-collapsed
+    // like ordinary text (newlines folded to a single space, leading
+    // whitespace after a nested-element sibling crushed to one space),
+    // instead of surviving verbatim per the HTML content model for `<pre>`.
+    let src = concat!(
+        "@template {\n",
+        "  <pre>=====\n",
+        "===       Every<b>dom</b>\n",
+        "=====     router for many domains</pre>\n",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let js = emit(&unit, "pre-demo").js;
+
+    assert!(
+        js.contains("leaf('=====\\n===       Every')"),
+        "first <pre> text run must keep its newline and inner spacing verbatim; got:\n{js}"
+    );
+    assert!(
+        js.contains("leaf('\\n=====     router for many domains')"),
+        "text after <b>dom</b> must keep its leading newline and run of spaces before \
+         'router' verbatim; got:\n{js}"
+    );
+    assert!(
+        js.contains("branch('b', undefined, [leaf('dom')])"),
+        "the nested <b>dom</b> element must still compile normally; got:\n{js}"
+    );
+}
+
+#[test]
+fn pre_strips_only_the_single_conventional_leading_newline() {
+    // The one HTML-spec trim inside `<pre>`/`<textarea>`: a single U+000A
+    // immediately after the opening tag is ignored; everything else,
+    // including further blank lines, is verbatim.
+    let src = "@template {\n  <pre>\nfoo\n\nbar</pre>\n}";
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let js = emit(&unit, "pre-newline").js;
+    assert!(
+        js.contains("leaf('foo\\n\\nbar')"),
+        "expected exactly one leading newline stripped, the rest verbatim; got:\n{js}"
+    );
+}
+
+#[test]
+fn textarea_content_emits_verbatim_static_text() {
+    // Same HTML content-model rule applies to `<textarea>`.
+    let src = "@template {\n  <textarea>  keep  spaces\nand lines  </textarea>\n}";
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let js = emit(&unit, "ta-demo").js;
+    assert!(
+        js.contains("leaf('  keep  spaces\\nand lines  ')"),
+        "expected <textarea> content verbatim; got:\n{js}"
+    );
+}
+
+#[test]
+fn non_pre_whitespace_collapse_still_applies() {
+    // Regression guard: ordinary (non-`<pre>`/`<textarea>`) template text
+    // must keep collapsing per-line whitespace exactly as before this fix.
+    let src = "@template {\n  <p>\n    hello   world\n  </p>\n}";
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let js = emit(&unit, "p-demo").js;
+    assert!(
+        js.contains("leaf('hello   world')"),
+        "surrounding template-body newlines must still be stripped and mid-line runs kept; got:\n{js}"
+    );
+}

@@ -168,7 +168,7 @@ pub fn validate_template(nodes: &[TemplateNode]) -> Result<(), CompileError> {
                 }
                 validate_template(children)?;
             }
-            TemplateNode::Text(_) => {}
+            TemplateNode::Text(_) | TemplateNode::RawText(_) => {}
             TemplateNode::Interpolation(expr) => {
                 validate_expr(expr, ExprPosition::Interpolation)?;
             }
