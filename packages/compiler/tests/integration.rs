@@ -611,8 +611,10 @@ fn per_instance_registration_uses_same_opaque_ids_as_export() {
 ///    and never reaches the signal).
 ///  - a `$action` handler must stay wrapped in `return batch(...)` so its
 ///    return value surfaces to the agent (batch now returns its callback value).
-/// Asserted across all three emission sites: the server `__agentBinding`, the
-/// client `__agentDispatcher` export, and the in-setup `_registerAgentDispatcher`.
+/// Asserted across all four emission sites: the client `__agentDispatcher`
+/// export and in-setup `_registerAgentDispatcher` (CLIENT target), and the
+/// server `__agentBinding` export and in-setup `_registerAgentServerBinding`
+/// (SERVER target — aihu-compiler#32).
 #[test]
 fn agent_prop_write_uses_setter_and_action_returns_value() {
     use aihu_compiler::types::BuildTarget;
@@ -667,6 +669,41 @@ state label: string
         client.js.contains("() => label()"),
         "prop read must call the getter, got:\n{}",
         client.js
+    );
+
+    // aihu-compiler#32 — this test's own doc comment claims to assert "all
+    // three emission sites" (server `__agentBinding`, client
+    // `__agentDispatcher`, in-setup `_registerAgentDispatcher`), but until now
+    // it only ever compiled+inspected the CLIENT target. Compile the SERVER
+    // target too and check the same fixes reach its two agent-registration
+    // sites: the in-setup `_registerAgentServerBinding` call and the
+    // module-scope `__agentBinding` export.
+    let mut server_unit = compile_full(&parsed).unwrap();
+    server_unit.target = BuildTarget::Server;
+    let server = emit(&server_unit, "repro-card");
+
+    assert!(
+        server.js.contains("function bump(args) { return batch("),
+        "$action must lower to `return batch(...)` on the server target too, got:\n{}",
+        server.js
+    );
+    assert!(
+        !server.js.contains("label = v }"),
+        "server prop write must NOT reassign the const binding, got:\n{}",
+        server.js
+    );
+    // `label.set(v)` appears in BOTH the in-setup `_registerAgentServerBinding`
+    // call and the module-scope `__agentBinding` export.
+    assert!(
+        server.js.matches("label.set(v)").count() >= 2,
+        "expected >=2 `label.set(v)` writes (in-setup server registration + module export), got {} in:\n{}",
+        server.js.matches("label.set(v)").count(),
+        server.js
+    );
+    assert!(
+        server.js.contains("label: () => label()"),
+        "server prop read must call the getter, got:\n{}",
+        server.js
     );
 }
 

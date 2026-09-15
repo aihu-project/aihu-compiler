@@ -730,3 +730,91 @@ mod agent_metadata_param_schema_tests {
         );
     }
 }
+
+// ─── aihu-compiler#32 — direct coverage for `build_server_binding_registration_stmt` ──
+//
+// This is the SERVER-only statement builder the `--target server` emission
+// path relies on to land a `LiveBinding` in arbor's `componentInstanceRegistry`
+// (the headless `@aihu/agent-service` gate path). Before this test module,
+// nothing exercised it directly — only indirectly, via the CLIENT-targeted
+// `agent_prop_write_uses_setter_and_action_returns_value` integration test,
+// which never inspects a server build's output at all.
+#[cfg(test)]
+mod build_server_binding_registration_stmt_tests {
+    use super::build_server_binding_registration_stmt;
+    use crate::types::{AgentBlock, AgentMacroDecl};
+
+    fn script(entries: &str) -> String {
+        format!("@state {{\n$action: {{\n{}\n}}\n}}", entries)
+    }
+
+    #[test]
+    fn no_exposed_members_emits_nothing() {
+        let s = script("");
+        let out = build_server_binding_registration_stmt("my-el", None, &s, "ctx");
+        assert_eq!(out, "", "no exposed members means nothing to register");
+    }
+
+    #[test]
+    fn exposed_action_emits_named_registration_by_name_not_opaque_id() {
+        let s = script("bump: { expose: { read: true }, handler: () => setCount(count() + 1) }");
+        let out = build_server_binding_registration_stmt("my-el", None, &s, "ctx");
+        assert!(
+            out.contains("_registerAgentServerBinding(ctx?.element, {"),
+            "must call _registerAgentServerBinding on the ctx param's element:\n{out}"
+        );
+        assert!(
+            out.contains("bump: (args) => bump(args)"),
+            "server binding must key actions by their real NAME, not an opaque id:\n{out}"
+        );
+        assert!(!out.contains("a_"), "no opaque id prefix expected in a server binding:\n{out}");
+    }
+
+    #[test]
+    fn no_agent_block_is_unscoped_and_unthrottled() {
+        let s = script("bump: { expose: { read: true }, handler: () => setCount(count() + 1) }");
+        let out = build_server_binding_registration_stmt("my-el", None, &s, "ctx");
+        assert!(
+            out.contains("scope: undefined") && out.contains("rateLimit: undefined"),
+            "an exposed-members-only component (no @agent block) must be unscoped/unthrottled:\n{out}"
+        );
+    }
+
+    #[test]
+    fn agent_block_scope_and_rate_limit_reach_the_registration() {
+        let s = script("bump: { expose: { read: true }, handler: () => setCount(count() + 1) }");
+        let agent = AgentBlock {
+            agent_macros: vec![
+                AgentMacroDecl::Scope("user:write".to_string()),
+                AgentMacroDecl::RateLimit(30),
+            ],
+            ..Default::default()
+        };
+        let out = build_server_binding_registration_stmt("my-el", Some(&agent), &s, "ctx");
+        assert!(
+            out.contains("scope: 'user:write'"),
+            "declared $scope must reach the server binding verbatim:\n{out}"
+        );
+        assert!(
+            out.contains("rateLimit: '30/min'"),
+            "declared $rate-limit must reach the server binding as '<n>/min':\n{out}"
+        );
+    }
+
+    #[test]
+    fn read_and_write_members_use_getter_and_setter_forms() {
+        let s = format!(
+            "@state {{\n$prop: {{\n{}\n}}\n}}",
+            "label: { default: 'hi', expose: { read: true, write: true } },"
+        );
+        let out = build_server_binding_registration_stmt("my-el", None, &s, "ctx");
+        assert!(
+            out.contains("label: () => label()"),
+            "exposed read must call the prop getter by name:\n{out}"
+        );
+        assert!(
+            out.contains("label: (v) => label.set(v)"),
+            "exposed write must call the prop signal's .set(v) by name:\n{out}"
+        );
+    }
+}

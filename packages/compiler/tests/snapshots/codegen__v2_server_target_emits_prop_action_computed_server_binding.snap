@@ -1,0 +1,122 @@
+---
+source: packages/compiler/tests/codegen.rs
+assertion_line: 638
+expression: result.js
+---
+import { registerAgentMetadata } from '@aihu/agent'
+// @aihu:extract read=scope:user:write call=anonymous
+// @aihu:island interactive
+import { branch, leaf, slot } from '@aihu/arbor'
+import type { Signal } from '@aihu/signals'
+import { signal, computed, batch } from '@aihu/signals'
+import { defineComponent, defineElement, _registerAgentServerBinding } from '@aihu/runtime'
+import { __aihu_eattr, __aihu_stext } from '@aihu/runtime/ssr'
+
+const __aihu_setup__ = (ctx) => {
+  const label = ctx.props.label
+
+  const [count, setCount] = signal(0)
+
+  const shout = computed(() => label().toUpperCase());
+  function bump() { return batch(() => { setCount(count() + 1) }) }
+  _registerAgentServerBinding(ctx?.element, {
+    tag: 'v2-exposed',
+    actions: {
+      bump: (args) => bump(args)
+    },
+    reads: {
+      label: () => label(),
+      shout: () => shout()
+    },
+    writes: {
+      label: (v) => label.set(v)
+    },
+    scope: 'user:write',
+    rateLimit: '30/min',
+  })
+  return branch('div', undefined, [leaf([() => label() as unknown as string, () => {}] as unknown as Signal<string>)])
+}
+
+// DOM registration — side-effect only where custom elements exist (browser
+// or a DOM-shimmed host); a plain Node/Bun SSR import skips it.
+if (typeof HTMLElement !== 'undefined' && typeof customElements !== 'undefined') {
+  defineElement('v2-exposed', defineComponent({
+  props: {
+    label: { value: 'hi' }
+  },
+  setup: __aihu_setup__,
+  }))
+}
+
+/** SSR entry (GX P4) — standalone arbor-tree factory with prop threading.
+ * Host-less server SetupContext: no element, no shadow root; lifecycle
+ * registration is not reachable from here (server render never mounts).
+ * `props` values arrive plain (e.g. `{ route: { params, data } }`) and are
+ * wrapped as inert PropSignal-shaped getters — reads work, writes no-op. */
+const __aihu_ssr_prop = (v: unknown) => Object.assign(() => v, { set: (_v: unknown) => {} })
+export const __ssr = (props: Record<string, unknown> = {}) => __aihu_setup__({ host: null, element: null, attrs: {}, props: { label: __aihu_ssr_prop(props.label ?? 'hi') } })
+export default __ssr
+
+/** SSR string fast path (wave-3) — compile-time lowering of the template to
+ * straight-line string concatenation. Byte-identical to @aihu/server's
+ * tree-walk renderer for the same component+state; hydration markers and
+ * `data-aihu-path` attrs are emitted when `opts.hydratable`. */
+// This component's light-DOM scope id (light-DOM leaf flip, LDF §10 step 3):
+// `undefined` here in Rust's own output — whether this SPECIFIC component
+// resolves to light mode depends on the plugin-global `shadowMode` config,
+// which only the JS layer (`index.ts`'s `transform` hook, run AFTER this Rust
+// codegen) knows. `_injectLightScopeId` there replaces this literal with the
+// real id when applicable — same pattern `_injectShadowMode` already uses for
+// `defineElement`'s options, but as a real binding (not a parsed comment)
+// since the value must reach `__ssrString`'s runtime merge below, not just
+// gate a Rust-side codegen choice.
+// The opts every compiled string renderer accepts. Spelled ONCE: it appears
+// in four positions below, and `children` (the pre-resolved tag -> module
+// registry that `__aihu_schild` renders from) has to reach all of them.
+// Inline `import(...)` keeps this type-only -- erased at compile time, so an
+// artifact that uses no SSR helpers grows no runtime edge on @aihu/runtime/ssr.
+type __AihuSsrOpts = import('@aihu/runtime/ssr').SsrChildRenderOpts;
+const __AIHU_LIGHT_SCOPE_ID__: string | undefined = undefined;
+const __aihu_ssr_string_setup__ = (ctx, __opts: __AihuSsrOpts = {}) => {
+  const label = ctx.props.label
+
+  const [count, setCount] = signal(0)
+
+  const shout = computed(() => label().toUpperCase());
+  function bump() { return batch(() => { setCount(count() + 1) }) }
+  const __h = !!__opts.hydratable
+  let __out = ''
+  __out += __h ? `<div${(__opts.lightScopeId ? ' data-a="' + __aihu_eattr(__opts.lightScopeId) + '"' : '')} data-aihu-path="0">${__aihu_stext(label())}</div>` : `<div${(__opts.lightScopeId ? ' data-a="' + __aihu_eattr(__opts.lightScopeId) + '"' : '')}>${__aihu_stext(label())}</div>`
+  return __out
+}
+
+export const __ssrString = (props: Record<string, unknown> = {}, opts: __AihuSsrOpts = {}) => __aihu_ssr_string_setup__({ host: null, element: null, attrs: {}, props: { label: __aihu_ssr_prop(props.label ?? 'hi') } }, { ...opts, lightScopeId: opts.lightScopeId ?? __AIHU_LIGHT_SCOPE_ID__ })
+;(__ssr as unknown as { __aihu_ssr_string__?: (opts?: __AihuSsrOpts) => string }).__aihu_ssr_string__ = (opts?: __AihuSsrOpts) => __ssrString({}, opts)
+
+registerAgentMetadata({
+  tag: 'v2-exposed',
+  state: {
+    label: 'The visible label',
+    shout: 'Label in upper case'
+  },
+  actions: {
+    bump: { describe: 'Increment the counter by one', returns: {}, params: { properties: {  }, required: [] } }
+  },
+  extract: { "read": { "scope": "user:write" }, "call": "anonymous" },
+})
+
+export const __agentBinding = {
+  tag: 'v2-exposed',
+  actions: {
+    bump: (args) => bump(args)
+  },
+  reads: {
+    label: () => label(),
+    shout: () => shout()
+  },
+  writes: {
+    label: (v) => label.set(v)
+  },
+  scope: 'user:write',
+  rateLimit: '30/min',
+}
