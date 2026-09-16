@@ -1376,10 +1376,13 @@ pub(crate) fn collect_prop_entries(macros: &[crate::types::StateMacro]) -> Vec<&
     out
 }
 
-/// Emit the `props: { name: { value, attribute, reflect, converter }, ... }`
+/// Emit the `props: { name: { value, attribute, reflect, converter, required }, ... }`
 /// object literal passed to `defineComponent({ props, setup })`. Per-prop
 /// keys are pulled verbatim from the metadata-bag (`default:` is renamed to
-/// `value:` so the runtime side reads the same key universally).
+/// `value:` so the runtime side reads the same key universally). `required`
+/// is passed through only when `true` — the runtime uses it to warn
+/// (SCR-C009) when the caller omits the prop instead of silently coercing to
+/// its zero value.
 ///
 /// Indent is applied to each top-level prop entry; the surrounding `props: {`
 /// + `}` are emitted by the caller.
@@ -1405,6 +1408,13 @@ pub(crate) fn emit_props_config(prop_entries: &[&crate::types::CollectionEntry],
         }
         if let Some(conv_raw) = meta_get(entry, "converter") {
             bag.push(format!("converter: {}", conv_raw.trim()));
+        }
+        // TODO-003 — thread `required:` through so the runtime can warn
+        // (SCR-C009) when the attribute/prop is omitted at the call site.
+        if let Some(required_raw) = meta_get(entry, "required") {
+            if required_raw.trim() == "true" {
+                bag.push("required: true".to_string());
+            }
         }
         let bag_str = if bag.is_empty() {
             "{}".to_string()

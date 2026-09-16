@@ -1206,6 +1206,26 @@ fn parse_object_collection(
                     });
                 }
             }
+            // C448: `required: true` + `default:` is a contradiction — a
+            // required prop has no fallback value by definition (TODO-003).
+            let required = meta.iter().find(|(k, _)| k == "required").map(|(_, v)| v.trim());
+            let has_default = meta.iter().any(|(k, _)| k == "default");
+            if required == Some("true") && has_default {
+                return Err(CompileError {
+                    message: format!(
+                        "$prop entry `{}`: `required: true` is incompatible with `default:` (a required prop has no fallback value)",
+                        name
+                    ),
+                    line: 0,
+                    col: 0,
+                    code: Some("C448".to_string()),
+                    hint: Some(
+                        "remove either `required: true` (keeps the default as a fallback) or `default:` (keeps the prop required)"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                });
+            }
         }
 
         entries.push(CollectionEntry {

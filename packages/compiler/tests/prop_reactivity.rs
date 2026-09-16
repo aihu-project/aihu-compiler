@@ -187,6 +187,88 @@ fn r1_ac11_attribute_false_plus_reflect_true_rejected() {
     );
 }
 
+// TODO-003 — `required: true` (no `default:`) flows through to the runtime
+// props config verbatim, in both the legacy `$prop` and wrapper `prop()`
+// dialects, so the runtime can warn (SCR-C009) when the caller omits it.
+#[test]
+fn todo_003_required_true_forwarded_legacy_dialect() {
+    let src = r#"@state {
+  $prop: {
+    label: { required: true },
+  }
+}
+@template { <span>{label}</span> }"#;
+    let js = compile_to_js(src, "x-todo-003-legacy");
+    assert!(
+        js.contains("required: true"),
+        "required: true must be forwarded to runtime: {}",
+        js
+    );
+}
+
+#[test]
+fn todo_003_required_true_forwarded_wrapper_dialect() {
+    let src = r#"@state {
+  const label = prop<string>({ required: true })
+}
+@template { <span>{label}</span> }"#;
+    let js = compile_to_js(src, "x-todo-003-wrapper");
+    assert!(
+        js.contains("required: true"),
+        "required: true must be forwarded to runtime: {}",
+        js
+    );
+}
+
+// A prop with neither `required:` nor `default:` (or `required: false`)
+// must NOT emit `required:` at all — no behavior change for existing files.
+#[test]
+fn todo_003_required_absent_by_default() {
+    let src = r#"@state {
+  $prop: {
+    label: { default: '' },
+  }
+}
+@template { <span>{label}</span> }"#;
+    let js = compile_to_js(src, "x-todo-003-absent");
+    assert!(
+        !js.contains("required:"),
+        "required must not be emitted when not declared: {}",
+        js
+    );
+}
+
+// TODO-003 — `required: true` + `default:` is a contradiction (C448), in
+// both dialects.
+#[test]
+fn todo_003_required_plus_default_rejected_legacy_dialect() {
+    let src = r#"@state {
+  $prop: {
+    label: { required: true, default: 'x' },
+  }
+}
+@template { <span>{label}</span> }"#;
+    let parsed = sfc::parse(src).unwrap();
+    let err = compile_full(&parsed).expect_err("compile should fail with C448");
+    assert_eq!(err.code.as_deref(), Some("C448"));
+    assert!(
+        err.message.contains("required: true") && err.message.contains("default:"),
+        "C448 message should reference both keys: {}",
+        err.message
+    );
+}
+
+#[test]
+fn todo_003_required_plus_default_rejected_wrapper_dialect() {
+    let src = r#"@state {
+  const label = prop<string>({ required: true, default: 'x' })
+}
+@template { <span>{label}</span> }"#;
+    let parsed = sfc::parse(src).unwrap();
+    let err = compile_full(&parsed).expect_err("compile should fail with C448");
+    assert_eq!(err.code.as_deref(), Some("C448"));
+}
+
 // AC9 — frozen legacy fixture compiles (regression smoke). example-shell.aihu
 // is the canonical $prop regression input.
 #[test]
