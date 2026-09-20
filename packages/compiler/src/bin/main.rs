@@ -203,6 +203,21 @@ fn main() {
         }
     };
 
+    // L2 (v0.6.0 roadmap): `--css-layer-name <name>` overrides the `@layer`
+    // name a scoped `@style` block's CSS is wrapped in. Omitted → the
+    // compiled-in default (`DEFAULT_CSS_LAYER_NAME`, "aihu-component").
+    let css_layer_name: Option<String> = {
+        let pos = args.iter().position(|a| a == "--css-layer-name");
+        match pos {
+            Some(i) if i + 1 < args.len() => Some(args[i + 1].clone()),
+            Some(_) => {
+                eprintln!("error: --css-layer-name requires a value");
+                process::exit(1);
+            }
+            None => None,
+        }
+    };
+
     // Parse --out <dir>
     let out_dir: Option<String> = {
         let pos = args.iter().position(|a| a == "--out");
@@ -360,6 +375,9 @@ fn main() {
         if !opts.strict_templates {
             opts.strict_templates = args.iter().any(|a| a == "--strict-templates");
         }
+        if opts.css_layer_name.is_none() {
+            opts.css_layer_name = css_layer_name.clone();
+        }
         let envelope =
             aihu_compiler::compile_envelope(&source, &opts).unwrap_or_else(|e| on_err(&e));
         match serde_json::to_string(&envelope) {
@@ -501,7 +519,12 @@ fn main() {
     // component-prop type layer on. Default-off keeps the type-check surface
     // byte-identical (the flag affects ONLY `sidecar_ts`, never the JS).
     let strict_templates = args.iter().any(|a| a == "--strict-templates");
-    let result = aihu_compiler::emit_with_options(&unit, &tag_name, strict_templates);
+    let result = aihu_compiler::emit_with_options(
+        &unit,
+        &tag_name,
+        strict_templates,
+        css_layer_name.as_deref(),
+    );
 
     // B3b — optional `--sidecar-out <path>` writes the per-SFC `.aihu.ts`
     // sidecar to that exact path. Used by the Vite plugin to write the

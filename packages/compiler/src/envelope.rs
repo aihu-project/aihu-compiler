@@ -54,6 +54,10 @@ pub struct EnvelopeOptions {
     /// `AIHU_EXPR_PARSER` env var, then the compiled-in default — identical
     /// to the CLI's resolution order.
     pub expr_parser: Option<String>,
+    /// L2 (v0.6.0 roadmap) `--css-layer-name`. The `@layer` name a scoped
+    /// `@style` block's CSS is wrapped in. Omitted → [`crate::DEFAULT_CSS_LAYER_NAME`]
+    /// (`"aihu-component"`).
+    pub css_layer_name: Option<String>,
 }
 
 /// Per-target artifacts. `js` is byte-identical to the legacy single-target
@@ -292,7 +296,12 @@ pub fn compile_envelope(source: &str, opts: &EnvelopeOptions) -> Result<Envelope
     if needs_emit {
         for t in &targets {
             unit.target = *t;
-            let result = crate::emit_with_options(&unit, &tag_name, opts.strict_templates);
+            let result = crate::emit_with_options(
+                &unit,
+                &tag_name,
+                opts.strict_templates,
+                opts.css_layer_name.as_deref(),
+            );
             // `route_json` is target-independent (emit_route_json reads the
             // @route block + component tags + resolved extract, none of which
             // branch on target) — capture it from the first emit that has it.

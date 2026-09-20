@@ -302,3 +302,47 @@ fn envelope_compile_error_propagates() {
     let rendered = aihu_compiler::format_compile_error(&err);
     assert!(rendered.contains("C450"));
 }
+
+/// L2 (v0.6.0 roadmap issue #42) — `EnvelopeOptions.cssLayerName` (wire form
+/// of `css_layer_name`) reaches the same `@layer` wrapper as the legacy CLI's
+/// `--css-layer-name` flag / `emit_with_options`'s `css_layer_name` param.
+#[test]
+fn envelope_css_layer_name_wraps_scoped_style_output() {
+    let src = concat!(
+        "@template { <span>hi</span> }\n",
+        "@style {\nspan { color: red; }\n}"
+    );
+
+    // Omitted → the compiled-in default (aihu-component).
+    let default_env = compile_envelope(
+        src,
+        &EnvelopeOptions {
+            tag: Some("x-envelope-default-layer".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let default_js = default_env.targets["universal"].js.as_deref().unwrap();
+    assert!(
+        default_js.contains("@layer aihu-component {\nspan { color: red; }\n}"),
+        "envelope with no cssLayerName must default to @layer aihu-component; got:\n{}",
+        default_js
+    );
+
+    // Configured → overrides the default.
+    let custom_env = compile_envelope(
+        src,
+        &EnvelopeOptions {
+            tag: Some("x-envelope-custom-layer".to_string()),
+            css_layer_name: Some("app-shell".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let custom_js = custom_env.targets["universal"].js.as_deref().unwrap();
+    assert!(
+        custom_js.contains("@layer app-shell {\nspan { color: red; }\n}"),
+        "envelope cssLayerName must override the default @layer name; got:\n{}",
+        custom_js
+    );
+}

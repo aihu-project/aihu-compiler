@@ -180,6 +180,124 @@ fn style_scoped_emits_css_in_function_form() {
     insta::assert_snapshot!(output.js);
 }
 
+/// L2 (v0.6.0 roadmap issue #42) — a scoped `@style` block's CSS is wrapped in
+/// `@layer aihu-component { ... }` by default, so consumer apps get cascade
+/// control over aihu-generated component styles relative to their own layers
+/// (e.g. Tailwind 4's `@layer` model).
+#[test]
+fn style_scoped_wraps_default_css_layer() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-styled-layer");
+    assert!(
+        output
+            .js
+            .contains("@layer aihu-component {\nspan { color: red; }\n}"),
+        "scoped @style CSS must be wrapped in the default @layer aihu-component; got:\n{}",
+        output.js
+    );
+}
+
+/// A configured layer name (CLI `--css-layer-name`, envelope `cssLayerName`)
+/// replaces the default `aihu-component` name in the emitted `@layer` wrapper.
+#[test]
+fn style_scoped_wraps_configured_css_layer_name() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = aihu_compiler::emit_with_options(&unit, "x-styled-custom-layer", false, Some("my-app-components"));
+    assert!(
+        output
+            .js
+            .contains("@layer my-app-components {\nspan { color: red; }\n}"),
+        "a configured css_layer_name must replace the default in the @layer wrapper; got:\n{}",
+        output.js
+    );
+    assert!(
+        !output.js.contains("aihu-component"),
+        "the default layer name must not leak when a custom name is configured; got:\n{}",
+        output.js
+    );
+}
+
+/// Global `@style` blocks (`$global`) target `document`/`:root`, not a shadow
+/// root — layering them has different cascade implications than scoping a
+/// single component's rules, so L2 deliberately leaves them unwrapped.
+#[test]
+fn style_global_is_not_wrapped_in_css_layer() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "$global {
+",
+        "  :root { --brand: red; }
+",
+        "}
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-global-style");
+    assert!(
+        !output.js.contains("@layer"),
+        "a global @style block must not be wrapped in @layer; got:\n{}",
+        output.js
+    );
+}
+
+/// The SSR/DSD CSS export (`__aihu_css__`, used for Declarative Shadow DOM)
+/// must carry the SAME `@layer` wrapper as the client-adopted stylesheet path
+/// above, or the two would style identically-shaped output with different
+/// cascade precedence — see `emit_ssr_css_export`'s doc comment.
+#[test]
+fn style_scoped_ssr_css_export_wraps_default_css_layer() {
+    use aihu_compiler::{compile_full_with_target, types::BuildTarget};
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full_with_target(&parsed, BuildTarget::Server).unwrap();
+    let output = emit(&unit, "x-ssr-styled");
+    assert!(
+        output.js.contains("__aihu_css__"),
+        "server target must emit the __aihu_css__ SSR export; got:\n{}",
+        output.js
+    );
+    assert!(
+        output
+            .js
+            .contains("@layer aihu-component {\nspan { color: red; }\n}"),
+        "the SSR __aihu_css__ export must carry the same @layer wrapper as the client path; got:\n{}",
+        output.js
+    );
+}
+
 #[test]
 fn style_escapes_backtick_and_interpolation_for_template_literal() {
     // The @style block is emitted as a JS template literal passed to

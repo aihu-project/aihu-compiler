@@ -28,7 +28,10 @@ pub use ast_export::{
     build_owned_ast, compile_to_ast, SfcAstOwned, SfcAttrOwned, SfcIfBranch, SfcMacroValueOwned,
     SfcMetaOwned, SfcNodeOwned, SfcStyleBlockOwned, SfcStyleScope, AST_VERSION,
 };
-pub use codegen::{emit, emit_with_options, resolve_signals, EmitResult, IslandKind, SignalMap};
+pub use codegen::{
+    emit, emit_with_options, resolve_signals, EmitResult, IslandKind, SignalMap,
+    DEFAULT_CSS_LAYER_NAME,
+};
 pub use envelope::{
     compile_envelope, format_compile_error, resolve_define_tag, Envelope, EnvelopeDiagnostic,
     EnvelopeOptions, TargetEmit, ENVELOPE_VERSION,

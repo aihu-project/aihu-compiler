@@ -9,6 +9,6 @@ pub mod state_emit;
 pub mod template_emit;
 pub mod use_registry;
 
-pub use emit::{emit, emit_with_options, EmitResult, IslandKind};
+pub use emit::{emit, emit_with_options, EmitResult, IslandKind, DEFAULT_CSS_LAYER_NAME};
 pub use mcp_emit::has_exposed_agent_members;
 pub use signals::{resolve_signals, SignalMap};

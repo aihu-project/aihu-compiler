@@ -152,6 +152,18 @@ fn escape_css_for_js_literal(css: &str) -> String {
         .replace("${", "\\${")
 }
 
+/// L2 (v0.6.0 roadmap) — wrap a scoped component's CSS in a named `@layer`.
+///
+/// Consumer apps get cascade control over aihu-generated component styles
+/// relative to their own layers (e.g. Tailwind 4's `@layer` model): rules the
+/// app declares in its own named layer, or unlayered, can predictably beat or
+/// lose to a component's styles regardless of source order. `layer_name`
+/// defaults to `aihu-component` and is configurable per build (CLI
+/// `--css-layer-name`, envelope `cssLayerName`).
+fn wrap_in_css_layer(css: &str, layer_name: &str) -> String {
+    format!("@layer {layer_name} {{\n{css}\n}}")
+}
+
 /// The component's own CSS, exported as a plain string on the SERVER target.
 ///
 /// The client declaration is elided there because `new CSSStyleSheet()` is a
@@ -171,20 +183,25 @@ fn escape_css_for_js_literal(css: &str) -> String {
 /// stylesheet's `@scope([data-a=…])` blocks (#758). Emitted for both anyway —
 /// the mode can be reconfigured per build, and an export the renderer ignores
 /// costs nothing next to a missing one it needed.
-fn emit_ssr_css_export(style: &StyleBlock) -> String {
+fn emit_ssr_css_export(style: &StyleBlock, css_layer_name: &str) -> String {
     // Global styles belong to the document, not to any shadow root; inlining
     // them into a child's template would scope them to that child and silently
     // change what they match.
     if style.scope == StyleScope::Global {
         return String::new();
     }
+    // L2: matches the client/universal `emit_style_block` path below — the DSD
+    // inline `<style>` and the adopted `CSSStyleSheet` must carry the same
+    // `@layer` wrapper, or the two paths would style identically-shaped output
+    // with different cascade precedence.
+    let layered_css = wrap_in_css_layer(style.content, css_layer_name);
     format!(
         "\nexport const __aihu_css__ = `{}`\n",
-        escape_css_for_js_literal(style.content)
+        escape_css_for_js_literal(&layered_css)
     )
 }
 
-fn emit_style_block(style: &StyleBlock) -> (String, String) {
+fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String) {
     // Amendment 02: when the style block is global and the content contains
     // `$reactive(expr)` call patterns, extract them and emit JS effects targeting
     // `document.documentElement`. The CSS content has the calls replaced with
@@ -209,6 +226,17 @@ fn emit_style_block(style: &StyleBlock) -> (String, String) {
         (full_css, macro_js)
     } else {
         (style.content.to_string(), String::new())
+    };
+
+    // L2 (v0.6.0 roadmap): only the SCOPED (shadow-root) output is wrapped.
+    // Global `@style` blocks target `document`/`:root` and a layer wrapper has
+    // different cascade implications there (it would compete with the app's
+    // OWN document-level layers, not just other components) — out of scope
+    // for this item; see the tracking issue for the reasoning.
+    let css_content = if style.scope == StyleScope::Scoped {
+        wrap_in_css_layer(&css_content, css_layer_name)
+    } else {
+        css_content
     };
 
     // The CSS is interpolated into a JS template literal, so any backtick,
@@ -238,8 +266,13 @@ fn emit_style_block(style: &StyleBlock) -> (String, String) {
     (module_decl, setup_injection)
 }
 
+/// L2 (v0.6.0 roadmap) — the `@layer` name a scoped `@style` block's CSS is
+/// wrapped in when no override is configured (CLI `--css-layer-name`,
+/// envelope `cssLayerName`).
+pub const DEFAULT_CSS_LAYER_NAME: &str = "aihu-component";
+
 pub fn emit(unit: &CompileUnit, tag_name: &str) -> EmitResult {
-    emit_with_options(unit, tag_name, false)
+    emit_with_options(unit, tag_name, false, None)
 }
 
 /// #486 step 4 — `strict_templates` switches the sidecar's attribute/
@@ -257,8 +290,17 @@ pub fn emit(unit: &CompileUnit, tag_name: &str) -> EmitResult {
 /// the wasm binding, and `compile_envelope` (the napi addon path). A gate that
 /// cannot fail the build is not a gate; see
 /// `docs/lessons/hyphenless-custom-element-tags.md`.
-pub fn emit_with_options(unit: &CompileUnit, tag_name: &str, strict_templates: bool) -> EmitResult {
+///
+/// `css_layer_name` (L2, v0.6.0 roadmap): the `@layer` name a scoped `@style`
+/// block's CSS is wrapped in. `None` falls back to [`DEFAULT_CSS_LAYER_NAME`].
+pub fn emit_with_options(
+    unit: &CompileUnit,
+    tag_name: &str,
+    strict_templates: bool,
+    css_layer_name: Option<&str>,
+) -> EmitResult {
     let target = unit.target;
+    let css_layer_name = css_layer_name.unwrap_or(DEFAULT_CSS_LAYER_NAME);
 
     // GX Phase 1 (#437-GX) — resolve the ONE effective extract policy
     // (declaration → component-$scope derivation → the ratified default
@@ -374,6 +416,7 @@ pub fn emit_with_options(unit: &CompileUnit, tag_name: &str, strict_templates: b
             &extract,
             emit_ssr_entry,
             agent_reg,
+            css_layer_name,
         );
         island_kind = island_k;
         // v0.4.0: append __streamBinding export for server artifacts.
@@ -870,6 +913,9 @@ pub(crate) fn emit_function_form(
     // FEL-440 — which per-instance agent registration to emit into the setup
     // body (and which runtime symbol to import). See `AgentReg`.
     agent_reg: AgentReg,
+    // L2 (v0.6.0 roadmap) — the `@layer` name a scoped `@style` block's CSS is
+    // wrapped in.
+    css_layer_name: &str,
 ) -> (String, IslandKind) {
     let raw_script = unit.source.script.unwrap_or("");
 
@@ -1210,11 +1256,11 @@ pub(crate) fn emit_function_form(
             .source
             .style
             .as_ref()
-            .map(emit_ssr_css_export)
+            .map(|style| emit_ssr_css_export(style, css_layer_name))
             .unwrap_or_default();
         (css_export, String::new())
     } else if let Some(style) = &unit.source.style {
-        let (decl, injection) = emit_style_block(style);
+        let (decl, injection) = emit_style_block(style, css_layer_name);
         (decl, format!("  {}\n", injection))
     } else {
         (String::new(), String::new())
