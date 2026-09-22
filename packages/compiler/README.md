@@ -4,7 +4,7 @@
 
 Single File Component (.aihu) compiler — Rust binary + JS glue.
 
-Part of the **compiler + toolchain** layer of Aihu. Build-time only — does not ship to the client. The compiler reads `.aihu` SFC source (per the [Block Structure spec](../../docs/superpowers/specs/2026-05-02-spec-block-structure.md)) and emits standards-compliant Web Components.
+Part of the **compiler + toolchain** layer of Aihu. Build-time only — does not ship to the client. The compiler reads `.aihu` SFC source (per the [Block Structure spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-block-structure.md)) and emits standards-compliant Web Components.
 
 <!-- BEGIN_HANDWRITTEN: prose -->
 
@@ -76,7 +76,7 @@ npm install @aihu/compiler
 bun add @aihu/compiler
 ```
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: install -->
 
@@ -87,12 +87,12 @@ bun add @aihu/compiler
 
 | | |
 |---|---|
-| **Version** | `1.3.11` |
+| **Version** | `1.3.12` |
 | **Tier** | D — Compiler — Single-File Component (.aihu) → Web Component |
 | **Published files** | 4 entries |
 | **License** | MIT |
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: stats -->
 
@@ -108,7 +108,7 @@ bun add @aihu/compiler
 | `./codemods/state-wrapper` | `./dist/codemods/state-wrapper.js` | `—` |
 | `./codemods/template-grammar-v2` | `./dist/codemods/template-grammar-v2.js` | `—` |
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: exports -->
 
@@ -124,18 +124,18 @@ bun add @aihu/compiler
 
 **Optional dependencies (platform-specific):**
 
-- `@aihu/compiler-darwin-arm64` — `1.3.11`
-- `@aihu/compiler-darwin-x64` — `1.3.11`
-- `@aihu/compiler-linux-x64-gnu` — `1.3.11`
-- `@aihu/compiler-linux-arm64-gnu` — `1.3.11`
-- `@aihu/compiler-win32-x64-msvc` — `1.3.11`
-- `@aihu/compiler-native-darwin-arm64` — `1.3.11`
-- `@aihu/compiler-native-darwin-x64` — `1.3.11`
-- `@aihu/compiler-native-linux-x64-gnu` — `1.3.11`
-- `@aihu/compiler-native-linux-arm64-gnu` — `1.3.11`
-- `@aihu/compiler-native-win32-x64-msvc` — `1.3.11`
+- `@aihu/compiler-darwin-arm64` — `1.3.12`
+- `@aihu/compiler-darwin-x64` — `1.3.12`
+- `@aihu/compiler-linux-x64-gnu` — `1.3.12`
+- `@aihu/compiler-linux-arm64-gnu` — `1.3.12`
+- `@aihu/compiler-win32-x64-msvc` — `1.3.12`
+- `@aihu/compiler-native-darwin-arm64` — `1.3.12`
+- `@aihu/compiler-native-darwin-x64` — `1.3.12`
+- `@aihu/compiler-native-linux-x64-gnu` — `1.3.12`
+- `@aihu/compiler-native-linux-arm64-gnu` — `1.3.12`
+- `@aihu/compiler-native-win32-x64-msvc` — `1.3.12`
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: deps -->
 
@@ -144,12 +144,12 @@ bun add @aihu/compiler
 <!-- BEGIN_AUTOGEN: see-also -->
 <!-- regenerate: bun scripts/sync-readme.ts (also runs in pre-commit + CI) -->
 
-- [Block Structure spec](../../docs/superpowers/specs/2026-05-02-spec-block-structure.md)
-- [Template Attribute Syntax spec](../../docs/superpowers/specs/2026-05-02-spec-template-attribute-syntax.md)
-- [Macro Vocabulary spec](../../docs/superpowers/specs/2026-05-02-spec-macro-vocabulary.md)
+- [Block Structure spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-block-structure.md)
+- [Template Attribute Syntax spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-template-attribute-syntax.md)
+- [Macro Vocabulary spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-macro-vocabulary.md)
 - [Aihu framework root](../../README.md)
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: see-also -->
 
@@ -160,6 +160,6 @@ bun add @aihu/compiler
 
 MIT — see [LICENSE](../../LICENSE).
 
-<sub><i>Auto-generated against `@aihu/compiler@1.3.11`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler@1.3.12`.</i></sub>
 
 <!-- END_AUTOGEN: license -->
