@@ -1,6 +1,6 @@
 /// v0.4b — macro attribute parsing + emit integration tests.
 
-use aihu_compiler::{compile, compile_full, emit, sfc, Attr, MacroValue};
+use aihu_compiler::{compile_full, emit, sfc, Attr, MacroValue};
 use aihu_compiler::parser::template::parse_template;
 
 // ─── Parsing tests ────────────────────────────────────────────────────────────
@@ -202,9 +202,47 @@ fn macro_each_emits_create_each_boundary() {
     let parsed = sfc::parse(src).unwrap();
     let unit = compile_full(&parsed).unwrap();
     let result = emit(&unit, "my-comp");
-    assert!(result.js.contains("createEachBoundary"), "Expected createEachBoundary in: {}", result.js);
+    assert!(
+        result.js.contains("createEachBoundary"),
+        "Expected createEachBoundary in: {}",
+        result.js
+    );
     assert!(result.js.contains("items"), "Expected items in: {}", result.js);
     assert!(result.js.contains("getKey"), "Expected getKey in: {}", result.js);
+}
+
+#[test]
+fn keyless_each_emits_index_key_callback() {
+    let src = include_str!("../fixtures/keyless-each.aihu");
+    let parsed = sfc::parse_with_path(src, Some("fixtures/keyless-each.aihu")).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let result = emit(&unit, "my-comp");
+    assert!(
+        result
+            .js
+            .contains("createEachBoundary([() => (items)], (item, i) => i, (item, i) =>"),
+        "Expected an index key callback: {}",
+        result.js
+    );
+    assert!(
+        !result.js.contains(", undefined, (item, i) =>"),
+        "keyless each must not pass undefined: {}",
+        result.js
+    );
+}
+
+#[test]
+fn keyed_each_fixture_keeps_explicit_key_callback() {
+    let src = include_str!("../fixtures/keyed-each.aihu");
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let result = emit(&unit, "my-comp");
+    let each_call = result
+        .js
+        .lines()
+        .find(|line| line.contains("createEachBoundary(["))
+        .expect("explicit each boundary");
+    insta::assert_snapshot!(each_call);
 }
 
 // ─── New spec §3.3/§3.6 tests ─────────────────────────────────────────────────
@@ -220,8 +258,8 @@ fn each_spec_form_posts_as_post_emits_correct_boundary() {
     let unit = compile_full(&parsed).unwrap();
     let result = emit(&unit, "my-comp");
     assert!(
-        result.js.contains("createEachBoundary([() => (posts)], undefined, (post, i) =>"),
-        "Expected createEachBoundary([() => (posts)], undefined, (post, i) => in: {}",
+        result.js.contains("createEachBoundary([() => (posts)], (post, i) => i, (post, i) =>"),
+        "Expected createEachBoundary([() => (posts)], (post, i) => i, (post, i) => in: {}",
         result.js
     );
 }
@@ -237,8 +275,8 @@ fn each_spec_form_users_as_user_idx_emits_correct_aliases() {
     let unit = compile_full(&parsed).unwrap();
     let result = emit(&unit, "my-comp");
     assert!(
-        result.js.contains("createEachBoundary([() => (users)], undefined, (user, idx) =>"),
-        "Expected createEachBoundary([() => (users)], undefined, (user, idx) => in: {}",
+        result.js.contains("createEachBoundary([() => (users)], (user, idx) => idx, (user, idx) =>"),
+        "Expected createEachBoundary([() => (users)], (user, idx) => idx, (user, idx) => in: {}",
         result.js
     );
 }

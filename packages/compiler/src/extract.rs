@@ -575,10 +575,12 @@ mod tests {
 
     fn src(script: Option<&'static str>) -> AihuSource<'static> {
         AihuSource {
+            file_path: None,
             script,
             script_line: 0,
             template: None,
             template_line: 0,
+            template_column: 0,
             style: None,
             meta: crate::types::ScriptMeta { name: None },
             agent: None,

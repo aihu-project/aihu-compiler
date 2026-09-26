@@ -1,5 +1,13 @@
 # @aihu/compiler
 
+## Unreleased
+
+### Patch Changes
+
+- Keyless `each` loops now emit an index key callback and report a
+  location-aware warning recommending an explicit stable key. This needs the
+  paired Arbor runtime update described in the lane handoff before release.
+
 ## 1.3.12
 
 ### Patch Changes

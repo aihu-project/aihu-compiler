@@ -1,0 +1,3 @@
+@template {
+  <ul each={item of items}><li>{item.name}</li></ul>
+}

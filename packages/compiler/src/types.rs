@@ -228,6 +228,9 @@ pub struct StyleBlock<'a> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AihuSource<'a> {
+    /// Original source path, when supplied by the caller. Used to anchor
+    /// template diagnostics emitted after parsing.
+    pub file_path: Option<String>,
     pub script: Option<&'a str>,
     /// 1-based line in the original `.aihu` file where the `@state` body's first
     /// non-whitespace character sits. The type-check sidecar inlines the script
@@ -240,6 +243,8 @@ pub struct AihuSource<'a> {
     /// each lifted template expression on its real source line so `tsc`
     /// diagnostics point at the originating `.aihu` line. 0 when no @template.
     pub template_line: usize,
+    /// 0-based column in the original file where the trimmed template begins.
+    pub template_column: usize,
     pub style: Option<StyleBlock<'a>>,
     pub meta: ScriptMeta,
     pub agent: Option<AgentBlock>,
