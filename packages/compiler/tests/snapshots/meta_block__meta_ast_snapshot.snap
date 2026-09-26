@@ -1,14 +1,16 @@
 ---
-source: tests/meta_block.rs
+source: packages/compiler/tests/meta_block.rs
 expression: parsed
 ---
 AihuSource {
+    file_path: None,
     script: None,
     script_line: 0,
     template: Some(
         "<button>{{ label }}</button>",
     ),
     template_line: 8,
+    template_column: 2,
     style: None,
     meta: ScriptMeta {
         name: None,

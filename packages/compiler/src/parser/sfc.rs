@@ -6,6 +6,13 @@ fn line_at(source: &str, pos: usize) -> usize {
     source[..pos].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
+/// Count Unicode scalar values since the start of the containing line.
+fn col_at(source: &str, pos: usize) -> usize {
+    source[source[..pos].rfind('\n').map_or(0, |i| i + 1)..pos]
+        .chars()
+        .count()
+}
+
 /// The kind of block found at a given position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind {
@@ -922,6 +929,7 @@ pub fn parse_with_path<'a>(source: &'a str, file_path: Option<&str>) -> Result<A
     // 1-based source line of the @template body's first non-whitespace char.
     let mut script_line: usize = 0;
     let mut template_line: usize = 0;
+    let mut template_column: usize = 0;
     let mut style: Option<StyleBlock> = None;
     let meta = ScriptMeta { name: None };
     let mut agent_raw: Option<&str> = None;
@@ -1043,6 +1051,7 @@ pub fn parse_with_path<'a>(source: &'a str, file_path: Option<&str>) -> Result<A
                 let untrimmed = &source[body_start..close_pos];
                 let lead_ws = untrimmed.len() - untrimmed.trim_start().len();
                 template_line = line_at(source, body_start + lead_ws);
+                template_column = col_at(source, body_start + lead_ws);
                 template = Some(body);
             }
             BlockKind::Style => {
@@ -1155,10 +1164,12 @@ pub fn parse_with_path<'a>(source: &'a str, file_path: Option<&str>) -> Result<A
     };
 
     Ok(AihuSource {
+        file_path: file_path.map(str::to_string),
         script,
         script_line,
         template,
         template_line,
+        template_column,
         style,
         meta,
         agent,

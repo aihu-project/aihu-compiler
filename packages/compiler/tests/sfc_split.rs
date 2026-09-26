@@ -70,10 +70,12 @@ fn compile_empty_source() {
     assert_eq!(
         result,
         aihu_compiler::AihuSource {
+            file_path: None,
             script: None,
             script_line: 0,
             template: None,
             template_line: 0,
+            template_column: 0,
             style: None,
             meta: aihu_compiler::ScriptMeta { name: None },
             agent: None,

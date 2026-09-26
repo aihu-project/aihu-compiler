@@ -52,12 +52,22 @@ pub fn write_tail(w: &mut impl Write, e: &CompileError) {
 /// The code is optional so pre-existing uncoded warnings can migrate to this
 /// path without inventing a code for each in the same change.
 pub fn write_warning(w: &mut impl Write, e: &CompileError) {
+    write_warning_at(w, e, None);
+}
+
+/// Render a warning with its source path when one is available.
+pub fn write_warning_at(w: &mut impl Write, e: &CompileError, file: Option<&str>) {
+    let location = match (file, e.line, e.col) {
+        (Some(file), line, col) if line > 0 => format!("{}:{}:{}: ", file, line, col),
+        (None, line, col) if line > 0 => format!("<input>:{}:{}: ", line, col),
+        _ => String::new(),
+    };
     match e.code.as_deref() {
         Some(code) => {
-            let _ = writeln!(w, "warning: {}: {}", code, e.message);
+            let _ = writeln!(w, "warning: {}{}: {}", location, code, e.message);
         }
         None => {
-            let _ = writeln!(w, "warning: {}", e.message);
+            let _ = writeln!(w, "warning: {}{}", location, e.message);
         }
     }
     write_tail(w, e);
@@ -66,6 +76,11 @@ pub fn write_warning(w: &mut impl Write, e: &CompileError) {
 /// [`write_warning`] to stderr — the normal call form.
 pub fn emit_warning(e: &CompileError) {
     write_warning(&mut std::io::stderr(), e);
+}
+
+/// [`write_warning_at`] to stderr — the normal location-aware call form.
+pub fn emit_warning_at(e: &CompileError, file: Option<&str>) {
+    write_warning_at(&mut std::io::stderr(), e, file);
 }
 
 #[cfg(test)]
