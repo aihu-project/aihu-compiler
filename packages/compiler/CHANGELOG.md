@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+## 1.3.13
+
 ### Patch Changes
 
-- Keyless `each` loops now emit an index key callback and report a
-  location-aware warning recommending an explicit stable key. This needs the
-  paired Arbor runtime update described in the lane handoff before release.
+- A keyless `<each>` no longer crashes the built app at runtime
+  (`TypeError: e is not a function`). The compiler emits a default index key
+  callback and reports a warning with the file, line and column recommending
+  an explicit stable `key` when items can reorder. Use with `@aihu/arbor`
+  including aihu-project/aihu-dom#19, which passes the index to key functions;
+  upgrade both together. Fixes aihu-project/aihu#875.
 
 ## 1.3.12
 
