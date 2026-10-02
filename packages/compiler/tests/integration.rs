@@ -222,6 +222,46 @@ const theme = { primary: '#ff0000' }
     );
 }
 
+/// FEL-410 (#41): the `effect(...)` registered for a global `$reactive(expr)`
+/// must be emitted AFTER the `@state` declaration `expr` reads, not before.
+/// `effect()` runs its callback synchronously at registration to track
+/// dependencies, so if `theme` is not declared yet when the effect line
+/// executes, accessing it throws a temporal-dead-zone `ReferenceError`.
+#[test]
+fn global_reactive_effect_emitted_after_state_declaration() {
+    let source = r#"@state {
+const theme = { primary: '#ff0000' }
+}
+@style {
+  $global {
+    color: $reactive(theme.primary)
+  }
+}
+@template {
+  <div></div>
+}"#;
+    let parsed = sfc::parse(source).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let result = emit(&unit, "theme-root");
+    let state_pos = result
+        .js
+        .find("const theme")
+        .expect("state declaration must appear in emitted JS");
+    let effect_pos = result
+        .js
+        .find("document.documentElement.style.setProperty")
+        .expect("reactive effect must appear in emitted JS");
+    assert!(
+        state_pos < effect_pos,
+        "the state declaration ('theme') must be emitted BEFORE the reactive \
+         effect that reads it, to avoid a TDZ ReferenceError at runtime; got \
+         state at {} and effect at {} in:\n{}",
+        state_pos,
+        effect_pos,
+        result.js
+    );
+}
+
 // ─── v0.3.0 AC1 — __agentBinding emission ────────────────────────────────────
 
 /// AC1a: Server artifact contains __agentBinding export with correct shape.
