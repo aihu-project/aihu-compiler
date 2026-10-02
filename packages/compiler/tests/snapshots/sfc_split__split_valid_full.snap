@@ -1,9 +1,9 @@
 ---
 source: packages/compiler/tests/sfc_split.rs
-assertion_line: 12
 expression: result
 ---
 AihuSource {
+    file_path: None,
     script: Some(
         "import { signal } from '@aihu/signals'\n\nconst [count, setCount] = signal(0)",
     ),
@@ -12,6 +12,7 @@ AihuSource {
         "<div>{{ count }}</div>",
     ),
     template_line: 8,
+    template_column: 2,
     style: Some(
         StyleBlock {
             content: "div { color: red; }",

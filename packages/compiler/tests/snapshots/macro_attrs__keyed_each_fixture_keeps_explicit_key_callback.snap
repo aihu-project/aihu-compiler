@@ -1,0 +1,5 @@
+---
+source: packages/compiler/tests/macro_attrs.rs
+expression: each_call
+---
+  return     createEachBoundary([() => (items)], (item) => item.id, (item, i) => { return branch('ul', undefined, [

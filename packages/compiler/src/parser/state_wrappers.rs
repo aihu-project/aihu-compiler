@@ -667,6 +667,26 @@ fn try_parse_binding(
                     ..Default::default()
                 });
             }
+            // C448: `required: true` + `default:` is a contradiction — a
+            // required prop has no fallback value by definition (TODO-003).
+            let required = meta.iter().find(|(k, _)| k == "required").map(|(_, v)| v.trim());
+            let has_default = meta.iter().any(|(k, _)| k == "default");
+            if required == Some("true") && has_default {
+                return Err(CompileError {
+                    message: format!(
+                        "prop `{}`: `required: true` is incompatible with `default:` (a required prop has no fallback value)",
+                        name
+                    ),
+                    line: 0,
+                    col: 0,
+                    code: Some("C448".to_string()),
+                    hint: Some(
+                        "remove either `required: true` (keeps the default as a fallback) or `default:` (keeps the prop required)"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                });
+            }
             // The generic parameter IS the type (§2.2 — the v2 `type:` key
             // retires; the sidecar checks the generic, and the runtime
             // coercion hint derives from it).
@@ -1430,5 +1450,26 @@ event<{ id: string }>('select', { bubbles: true, composed: true })
         let err = scan_state_wrappers("const x = prop({ default: 0, attribute: false, reflect: true })")
             .unwrap_err();
         assert_eq!(err.code.as_deref(), Some("C445"));
+    }
+
+    #[test]
+    fn c448_required_plus_default_rejected() {
+        let err = scan_state_wrappers("const x = prop<string>({ required: true, default: 'x' })")
+            .unwrap_err();
+        assert_eq!(err.code.as_deref(), Some("C448"));
+    }
+
+    #[test]
+    fn required_true_alone_parses() {
+        let s = scan("const label = prop<string>({ required: true })");
+        match &s.macros[0] {
+            StateMacro::Collection { kind: CollectionKind::Prop, entries } => {
+                assert_eq!(
+                    crate::parser::state_macros::meta_get(&entries[0], "required"),
+                    Some("true")
+                );
+            }
+            other => panic!("expected Prop, got {:?}", other),
+        }
     }
 }

@@ -714,7 +714,7 @@ pub(crate) fn emit_each_block(
             item_alias,
             rewrite_template_expr(k, body_signal_map, mode).source
         ),
-        None => "undefined".to_string(),
+        None => format!("({}, {}) => {}", item_alias, idx, idx),
     };
 
     // FEL-172: complex list exprs read getters by value
@@ -2878,7 +2878,7 @@ fn emit_macro_effects_scoped(
 
     if has_each {
         let key_part = if key_fn.is_empty() {
-            "undefined".to_string()
+            format!("({}, {}) => {}", item_alias, idx_alias, idx_alias)
         } else {
             // FEL-172: key exprs may read getters too ($key={section.id + b.ref}).
             format!(

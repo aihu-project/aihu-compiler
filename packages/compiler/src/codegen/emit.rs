@@ -184,7 +184,18 @@ fn emit_ssr_css_export(style: &StyleBlock) -> String {
     )
 }
 
-fn emit_style_block(style: &StyleBlock) -> (String, String) {
+/// Returns `(module_decl, setup_injection, reactive_effects)`.
+///
+/// FEL-410: `reactive_effects` (the `effect(() => document.documentElement...)`
+/// lines for `$reactive(expr)` inside `$global { }`) is split out from
+/// `setup_injection` (the non-reactive `adoptedStyleSheets` wiring) so the
+/// caller can emit it AFTER the component's `@state` declarations. `effect()`
+/// runs its callback synchronously at registration to track dependencies; if
+/// the referenced state (e.g. `theme` in `$reactive(theme().primary)`) is
+/// declared later in the setup body, that first synchronous run hits the
+/// temporal dead zone and throws. `setup_injection` itself has no such
+/// dependency, so it can stay at the top of the body.
+fn emit_style_block(style: &StyleBlock) -> (String, String, String) {
     // Amendment 02: when the style block is global and the content contains
     // `$reactive(expr)` call patterns, extract them and emit JS effects targeting
     // `document.documentElement`. The CSS content has the calls replaced with
@@ -221,7 +232,7 @@ fn emit_style_block(style: &StyleBlock) -> (String, String) {
         "const __style__ = new CSSStyleSheet();\n__style__.replaceSync(`{}`);\n",
         escaped_css
     );
-    let mut setup_injection = match style.scope {
+    let setup_injection = match style.scope {
         StyleScope::Scoped => {
             "(ctx.host as ShadowRoot).adoptedStyleSheets = [__style__];".to_string()
         }
@@ -229,13 +240,7 @@ fn emit_style_block(style: &StyleBlock) -> (String, String) {
             "document.adoptedStyleSheets = [...document.adoptedStyleSheets, __style__];".to_string()
         }
     };
-    // Append any document.documentElement effects after the style injection
-    if !global_reactive_effects.is_empty() {
-        setup_injection.push('\n');
-        setup_injection.push_str("  ");
-        setup_injection.push_str(&global_reactive_effects);
-    }
-    (module_decl, setup_injection)
+    (module_decl, setup_injection, global_reactive_effects)
 }
 
 pub fn emit(unit: &CompileUnit, tag_name: &str) -> EmitResult {
@@ -1201,7 +1206,7 @@ pub(crate) fn emit_function_form(
     // a compiled artifact un-importable in plain Node/Bun (`new
     // CSSStyleSheet()` + `document.adoptedStyleSheets`). Gate it OUT of the
     // standalone-SSR artifacts entirely.
-    let (module_decl, style_injection) = if ssr_no_dom {
+    let (module_decl, style_injection, style_reactive_effects) = if ssr_no_dom {
         // The CLIENT declaration stays elided (CSSStyleSheet is a DOM
         // dependency), but the CSS itself now rides the module channel as a
         // plain string so a declarative shadow root can carry its own styles.
@@ -1212,12 +1217,12 @@ pub(crate) fn emit_function_form(
             .as_ref()
             .map(emit_ssr_css_export)
             .unwrap_or_default();
-        (css_export, String::new())
+        (css_export, String::new(), String::new())
     } else if let Some(style) = &unit.source.style {
-        let (decl, injection) = emit_style_block(style);
-        (decl, format!("  {}\n", injection))
+        let (decl, injection, reactive_effects) = emit_style_block(style);
+        (decl, format!("  {}\n", injection), reactive_effects)
     } else {
-        (String::new(), String::new())
+        (String::new(), String::new(), String::new())
     };
 
     // `ctx` is only needed for the style injection (`ctx.host`), the
@@ -1325,6 +1330,16 @@ pub(crate) fn emit_function_form(
         if !plain_body.is_empty() {
             b.push_str(&plain_body);
             b.push_str("\n\n");
+        }
+        // FEL-410: `$reactive(expr)` global-style effects (Amendment 02,
+        // `document.documentElement` target) are emitted AFTER plain_body for
+        // the same reason macro_code is below — the effect's callback runs
+        // synchronously at registration and closes over `expr`'s state, which
+        // must already be declared. See the `emit_style_block` doc comment.
+        if !style_reactive_effects.is_empty() {
+            b.push_str("  ");
+            b.push_str(&style_reactive_effects);
+            b.push_str("\n");
         }
         // FEL-441: hoisted owner-scope `$ref` onMount registrations. Emitted
         // AFTER plain_body (the holder onMount closes over the ref's target

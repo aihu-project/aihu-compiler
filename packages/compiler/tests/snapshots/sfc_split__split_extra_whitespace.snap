@@ -1,9 +1,9 @@
 ---
 source: packages/compiler/tests/sfc_split.rs
-assertion_line: 33
 expression: result
 ---
 AihuSource {
+    file_path: None,
     script: Some(
         "const y = 2",
     ),
@@ -12,6 +12,7 @@ AihuSource {
         "<p>text</p>",
     ),
     template_line: 12,
+    template_column: 2,
     style: None,
     meta: ScriptMeta {
         name: None,
