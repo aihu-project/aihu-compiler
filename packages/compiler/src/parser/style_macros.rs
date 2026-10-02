@@ -183,6 +183,71 @@ pub fn parse_style_macros(body: &str) -> Result<Vec<StyleMacro>, CompileError> {
     Ok(result)
 }
 
+/// Expand style macros while preserving authored CSS surrounding them.
+/// Returns CSS and setup effects separately so effects can be placed after
+/// the component's state declarations.
+pub fn rewrite_style_macros(body: &str) -> Result<(String, String), CompileError> {
+    let macros = parse_style_macros(body)?;
+    if macros.is_empty() {
+        return Ok((body.to_string(), String::new()));
+    }
+
+    let mut css = String::new();
+    let mut cursor = 0;
+    while cursor < body.len() {
+        let line_end = body[cursor..]
+            .find('\n')
+            .map(|offset| cursor + offset)
+            .unwrap_or(body.len());
+        let line = body[cursor..line_end].trim_start();
+        if line.starts_with("$reactive ") {
+            cursor = if line_end < body.len() { line_end + 1 } else { line_end };
+            continue;
+        }
+        let block_macro = line.starts_with("$media ")
+            || line.starts_with("$when ")
+            || line.starts_with("$container(")
+            || line.starts_with("$prefers(");
+        if block_macro {
+            let open = body[cursor..]
+                .find('{')
+                .map(|offset| cursor + offset)
+                .ok_or_else(|| CompileError {
+                    message: "style macro block missing '{'".to_string(),
+                    line: 0,
+                    col: 0,
+                    code: Some("C413".to_string()),
+                    ..Default::default()
+                })?;
+            let close = find_brace_close(body, open + 1).ok_or_else(|| CompileError {
+                message: "unclosed style macro block".to_string(),
+                line: 0,
+                col: 0,
+                code: Some("C413".to_string()),
+                ..Default::default()
+            })?;
+            cursor = if body.as_bytes().get(close + 1) == Some(&b'\n') {
+                close + 2
+            } else {
+                close + 1
+            };
+            continue;
+        }
+        let end = if line_end < body.len() { line_end + 1 } else { line_end };
+        css.push_str(&body[cursor..end]);
+        cursor = end;
+    }
+
+    let (macro_css, macro_js) = emit_style_macros(&macros);
+    if !macro_css.is_empty() {
+        if !css.is_empty() && !css.ends_with('\n') {
+            css.push('\n');
+        }
+        css.push_str(&macro_css);
+    }
+    Ok((css, macro_js))
+}
+
 /// Split a macro argument list on top-level commas (not nested inside `( )`).
 /// Used for `$container(name?, query)`, where `query` itself may contain no
 /// parens today but is kept depth-aware for forward compatibility with
@@ -320,7 +385,7 @@ pub fn emit_style_macros(macros: &[StyleMacro]) -> (String, String) {
                 css_lines.push(format!("--reactive-{}: initial;", name));
                 // JS effect to update it
                 js_lines.push(format!(
-                    "effect(() => {{ el.style.setProperty('--reactive-{}', String({})) }});",
+                    "effect(() => {{ (ctx.host as ShadowRoot).host.style.setProperty('--reactive-{}', String({})) }});",
                     name, expr
                 ));
             }
@@ -341,7 +406,7 @@ pub fn emit_style_macros(macros: &[StyleMacro]) -> (String, String) {
                 let n = idx;
                 css_lines.push(format!("[data-when-{}] {{ {} }}", n, css));
                 js_lines.push(format!(
-                    "effect(() => {{ el.dataset.when{} = String(Boolean({})) }});",
+                    "effect(() => {{ (ctx.host as ShadowRoot).host.dataset.when{} = String(Boolean({})) }});",
                     n, expr
                 ));
             }

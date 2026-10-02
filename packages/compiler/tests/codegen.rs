@@ -1241,3 +1241,35 @@ fn non_pre_whitespace_collapse_still_applies() {
         "surrounding template-body newlines must still be stripped and mid-line runs kept; got:\n{js}"
     );
 }
+
+#[test]
+fn compiled_style_macros_lower_in_scoped_component_css() {
+    let parsed = sfc::parse(include_str!("../fixtures/style-container.aihu")).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-style-macros");
+    assert!(output.js.contains("@container sidebar (inline-size > 400px) { .label { display: block; } }"));
+    assert!(output.js.contains("@media (prefers-reduced-motion: reduce) { .label { transition: none !important; } }"));
+    assert!(output.js.contains(".label { display: inline; }"));
+    assert!(!output.js.contains("$container("));
+    assert!(!output.js.contains("$prefers("));
+
+    let server_unit = aihu_compiler::compile_full_with_target(
+        &parsed,
+        aihu_compiler::types::BuildTarget::Server,
+    )
+    .unwrap();
+    let server_output = emit(&server_unit, "x-style-macros");
+    assert!(server_output.js.contains("export const __aihu_css__"));
+    assert!(server_output.js.contains("@container sidebar (inline-size > 400px)"));
+    assert!(server_output.js.contains("prefers-reduced-motion: reduce"));
+}
+
+#[test]
+fn compiled_global_reactive_function_form_emits_its_expression() {
+    let parsed = sfc::parse(include_str!("../fixtures/style-global-reactive-function.aihu")).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-global-reactive-function");
+    assert!(output.js.contains("document.documentElement.style.setProperty"));
+    assert!(output.js.contains("theme.primary"));
+    assert!(!output.js.contains("() => theme.primary"));
+}

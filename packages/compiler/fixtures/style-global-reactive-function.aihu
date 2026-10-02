@@ -1,0 +1,9 @@
+@state {
+const theme = { primary: '#ff0000' }
+}
+@style {
+$global {
+  color: $reactive(() => theme.primary)
+}
+}
+@template { <span>hello</span> }

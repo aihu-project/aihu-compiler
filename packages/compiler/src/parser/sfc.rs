@@ -1082,6 +1082,7 @@ pub fn parse_with_path<'a>(source: &'a str, file_path: Option<&str>) -> Result<A
                 } else {
                     (StyleScope::Scoped, body)
                 };
+                crate::parser::style_macros::parse_style_macros(style_content)?;
                 style = Some(StyleBlock {
                     content: style_content,
                     scope: style_scope,
