@@ -180,6 +180,205 @@ fn style_scoped_emits_css_in_function_form() {
     insta::assert_snapshot!(output.js);
 }
 
+/// L2 (v0.6.0 roadmap issue #42) — a scoped `@style` block's CSS is wrapped in
+/// `@layer aihu-component { ... }` by default, so consumer apps get cascade
+/// control over aihu-generated component styles relative to their own layers
+/// (e.g. Tailwind 4's `@layer` model).
+#[test]
+fn style_scoped_wraps_default_css_layer() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-styled-layer");
+    assert!(
+        output
+            .js
+            .contains("@layer aihu-component {\nspan { color: red; }\n}"),
+        "scoped @style CSS must be wrapped in the default @layer aihu-component; got:\n{}",
+        output.js
+    );
+}
+
+/// A configured layer name (CLI `--css-layer-name`, envelope `cssLayerName`)
+/// replaces the default `aihu-component` name in the emitted `@layer` wrapper.
+#[test]
+fn style_scoped_wraps_configured_css_layer_name() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = aihu_compiler::emit_with_css_layer(
+        &unit,
+        "x-styled-custom-layer",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
+    assert!(
+        output
+            .js
+            .contains("@layer my-app.components {\nspan { color: red; }\n}"),
+        "a configured css_layer_name must replace the default in the @layer wrapper; got:\n{}",
+        output.js
+    );
+    assert!(
+        !output.js.contains("aihu-component"),
+        "the default layer name must not leak when a custom name is configured; got:\n{}",
+        output.js
+    );
+}
+
+#[test]
+fn compiled_style_macro_is_lowered_then_layered_identically_for_client_and_ssr() {
+    use aihu_compiler::{compile_full_with_target, types::BuildTarget};
+
+    let src = concat!(
+        "@template { <span class=\"label\">hello</span> }\n",
+        "@style {\n",
+        "$container(sidebar, inline-size > 400px) {\n",
+        "  .label { display: block; }\n",
+        "}\n",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let expected_css = "@layer my-app.components {\n@container sidebar (inline-size > 400px) { .label { display: block; } }\n}";
+
+    let client_unit = compile_full(&parsed).unwrap();
+    let client = aihu_compiler::emit_with_css_layer(
+        &client_unit,
+        "x-style-macro-layered",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
+    assert!(
+        client.js.contains(&format!("replaceSync(`{expected_css}`)")),
+        "client CSS should lower the macro before wrapping it in the configured layer; got:\n{}",
+        client.js
+    );
+
+    let ssr_unit = compile_full_with_target(&parsed, BuildTarget::Server).unwrap();
+    let ssr = aihu_compiler::emit_with_css_layer(
+        &ssr_unit,
+        "x-style-macro-layered",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
+    assert!(
+        ssr.js.contains(&format!("__aihu_css__ = `{expected_css}`")),
+        "SSR CSS should lower the macro and carry byte-identical layered CSS; got:\n{}",
+        ssr.js
+    );
+}
+
+#[test]
+fn css_layer_name_rejects_malformed_identifiers() {
+    for name in [
+        "x{}*{color:red}",
+        "a;b",
+        "bad\nname",
+        "",
+        ".foo",
+        "foo.",
+        "-1invalid",
+    ] {
+        let err = aihu_compiler::validate_css_layer_name(name)
+            .expect_err("malformed CSS layer names must be rejected before emission");
+        assert!(err.contains("invalid CSS layer name"), "{err}");
+    }
+    assert!(aihu_compiler::validate_css_layer_name("my-app.components").is_ok());
+    assert!(aihu_compiler::validate_css_layer_name("--app.-webkit").is_ok());
+}
+
+#[test]
+fn emit_with_options_keeps_legacy_three_argument_call() {
+    let src = concat!(
+        "@template { <span>hi</span> }\n",
+        "@style {\nspan { color: red; }\n}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = aihu_compiler::emit_with_options(&unit, "x-legacy-options", false);
+    assert!(output.js.contains("@layer aihu-component {"));
+}
+
+/// Global `@style` blocks (`$global`) target `document`/`:root`, not a shadow
+/// root — layering them has different cascade implications than scoping a
+/// single component's rules, so L2 deliberately leaves them unwrapped.
+#[test]
+fn style_global_is_not_wrapped_in_css_layer() {
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "$global {
+",
+        "  :root { --brand: red; }
+",
+        "}
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-global-style");
+    assert!(
+        !output.js.contains("@layer"),
+        "a global @style block must not be wrapped in @layer; got:\n{}",
+        output.js
+    );
+}
+
+/// The SSR/DSD CSS export (`__aihu_css__`, used for Declarative Shadow DOM)
+/// must carry the SAME `@layer` wrapper as the client-adopted stylesheet path
+/// above, or the two would style identically-shaped output with different
+/// cascade precedence — see `emit_ssr_css_export`'s doc comment.
+#[test]
+fn style_scoped_ssr_css_export_wraps_default_css_layer() {
+    use aihu_compiler::{compile_full_with_target, types::BuildTarget};
+    let src = concat!(
+        "@template { <span>hi</span> }
+",
+        "@style {
+",
+        "span { color: red; }
+",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full_with_target(&parsed, BuildTarget::Server).unwrap();
+    let output = emit(&unit, "x-ssr-styled");
+    assert!(
+        output.js.contains("__aihu_css__"),
+        "server target must emit the __aihu_css__ SSR export; got:\n{}",
+        output.js
+    );
+    assert!(
+        output
+            .js
+            .contains("@layer aihu-component {\nspan { color: red; }\n}"),
+        "the SSR __aihu_css__ export must carry the same @layer wrapper as the client path; got:\n{}",
+        output.js
+    );
+}
+
 #[test]
 fn style_escapes_backtick_and_interpolation_for_template_literal() {
     // The @style block is emitted as a JS template literal passed to
@@ -370,7 +569,10 @@ const fee = computed(() => 5)
     );
     // The multiline user import must be lifted intact to module scope.
     // The lifted block lives BEFORE the defineElement call.
-    let define_idx = result.js.find("defineElement(").expect("defineElement emitted");
+    let define_idx = result
+        .js
+        .find("defineElement(")
+        .expect("defineElement emitted");
     let module_scope = &result.js[..define_idx];
     assert!(
         module_scope.contains("import {")
@@ -1126,7 +1328,9 @@ fn repro_translation_waves_preserves_trailing_space() {
     let unit = compile_full(&parsed).unwrap();
     let output = emit(&unit, "x-ws-repro");
     assert!(
-        output.js.contains("leaf('Active and historical translation waves drained from ')"),
+        output
+            .js
+            .contains("leaf('Active and historical translation waves drained from ')"),
         "trailing space before <code> lost on repro; got:\n{}",
         output.js
     );
@@ -1163,7 +1367,10 @@ fn non_ascii_string_literals_in_expressions_are_not_latin1_mangled() {
     }
     // And none of the classic latin-1 mojibake leaders appear.
     for bad in ["Î»", "Ï", "â¾", "â¸", "×©"] {
-        assert!(!js.contains(bad), "latin-1 mojibake `{bad}` leaked into:\n{js}");
+        assert!(
+            !js.contains(bad),
+            "latin-1 mojibake `{bad}` leaked into:\n{js}"
+        );
     }
 }
 
