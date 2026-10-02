@@ -244,6 +244,50 @@ fn style_scoped_wraps_configured_css_layer_name() {
 }
 
 #[test]
+fn compiled_style_macro_is_lowered_then_layered_identically_for_client_and_ssr() {
+    use aihu_compiler::{compile_full_with_target, types::BuildTarget};
+
+    let src = concat!(
+        "@template { <span class=\"label\">hello</span> }\n",
+        "@style {\n",
+        "$container(sidebar, inline-size > 400px) {\n",
+        "  .label { display: block; }\n",
+        "}\n",
+        "}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let expected_css = "@layer my-app.components {\n@container sidebar (inline-size > 400px) { .label { display: block; } }\n}";
+
+    let client_unit = compile_full(&parsed).unwrap();
+    let client = aihu_compiler::emit_with_css_layer(
+        &client_unit,
+        "x-style-macro-layered",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
+    assert!(
+        client.js.contains(&format!("replaceSync(`{expected_css}`)")),
+        "client CSS should lower the macro before wrapping it in the configured layer; got:\n{}",
+        client.js
+    );
+
+    let ssr_unit = compile_full_with_target(&parsed, BuildTarget::Server).unwrap();
+    let ssr = aihu_compiler::emit_with_css_layer(
+        &ssr_unit,
+        "x-style-macro-layered",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
+    assert!(
+        ssr.js.contains(&format!("__aihu_css__ = `{expected_css}`")),
+        "SSR CSS should lower the macro and carry byte-identical layered CSS; got:\n{}",
+        ssr.js
+    );
+}
+
+#[test]
 fn css_layer_name_rejects_malformed_identifiers() {
     for name in [
         "x{}*{color:red}",
@@ -1403,4 +1447,36 @@ fn non_pre_whitespace_collapse_still_applies() {
         js.contains("leaf('hello   world')"),
         "surrounding template-body newlines must still be stripped and mid-line runs kept; got:\n{js}"
     );
+}
+
+#[test]
+fn compiled_style_macros_lower_in_scoped_component_css() {
+    let parsed = sfc::parse(include_str!("../fixtures/style-container.aihu")).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-style-macros");
+    assert!(output.js.contains("@container sidebar (inline-size > 400px) { .label { display: block; } }"));
+    assert!(output.js.contains("@media (prefers-reduced-motion: reduce) { .label { transition: none !important; } }"));
+    assert!(output.js.contains(".label { display: inline; }"));
+    assert!(!output.js.contains("$container("));
+    assert!(!output.js.contains("$prefers("));
+
+    let server_unit = aihu_compiler::compile_full_with_target(
+        &parsed,
+        aihu_compiler::types::BuildTarget::Server,
+    )
+    .unwrap();
+    let server_output = emit(&server_unit, "x-style-macros");
+    assert!(server_output.js.contains("export const __aihu_css__"));
+    assert!(server_output.js.contains("@container sidebar (inline-size > 400px)"));
+    assert!(server_output.js.contains("prefers-reduced-motion: reduce"));
+}
+
+#[test]
+fn compiled_global_reactive_function_form_emits_its_expression() {
+    let parsed = sfc::parse(include_str!("../fixtures/style-global-reactive-function.aihu")).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-global-reactive-function");
+    assert!(output.js.contains("document.documentElement.style.setProperty"));
+    assert!(output.js.contains("theme.primary"));
+    assert!(!output.js.contains("() => theme.primary"));
 }

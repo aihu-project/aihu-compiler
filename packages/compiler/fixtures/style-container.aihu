@@ -1,0 +1,10 @@
+@template { <span class="label">hello</span> }
+@style {
+.label { display: inline; }
+$container(sidebar, inline-size > 400px) {
+  .label { display: block; }
+}
+$prefers(reduced-motion) {
+  .label { transition: none !important; }
+}
+}

@@ -14,7 +14,7 @@ use super::template_emit::{
     collect_event_names, emit_nodes,
 };
 use crate::codegen::signals::SignalMap;
-use crate::parser::style_macros::{emit_style_macros, extract_global_reactives};
+use crate::parser::style_macros::{emit_style_macros, extract_global_reactives, rewrite_style_macros};
 use crate::types::{
     AgentBlock, Attr, BuildTarget, CompileUnit, InputKind, StyleBlock, StyleMacro, StyleScope,
     TemplateNode,
@@ -222,7 +222,11 @@ pub fn validate_css_layer_name(name: &str) -> Result<(), String> {
 /// stylesheet's `@scope([data-a=…])` blocks (#758). Emitted for both anyway —
 /// the mode can be reconfigured per build, and an export the renderer ignores
 /// costs nothing next to a missing one it needed.
-fn emit_ssr_css_export(style: &StyleBlock, css_layer_name: &str) -> String {
+fn emit_ssr_css_export(
+    style: &StyleBlock,
+    css_content: &str,
+    css_layer_name: &str,
+) -> String {
     // Global styles belong to the document, not to any shadow root; inlining
     // them into a child's template would scope them to that child and silently
     // change what they match.
@@ -233,7 +237,7 @@ fn emit_ssr_css_export(style: &StyleBlock, css_layer_name: &str) -> String {
     // inline `<style>` and the adopted `CSSStyleSheet` must carry the same
     // `@layer` wrapper, or the two paths would style identically-shaped output
     // with different cascade precedence.
-    let layered_css = wrap_in_css_layer(style.content, css_layer_name);
+    let layered_css = wrap_in_css_layer(css_content, css_layer_name);
     format!(
         "\nexport const __aihu_css__ = `{}`\n",
         escape_css_for_js_literal(&layered_css)
@@ -251,43 +255,17 @@ fn emit_ssr_css_export(style: &StyleBlock, css_layer_name: &str) -> String {
 /// declared later in the setup body, that first synchronous run hits the
 /// temporal dead zone and throws. `setup_injection` itself has no such
 /// dependency, so it can stay at the top of the body.
-fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String, String) {
-    // Amendment 02: when the style block is global and the content contains
-    // `$reactive(expr)` call patterns, extract them and emit JS effects targeting
-    // `document.documentElement`. The CSS content has the calls replaced with
-    // `var(--reactive-global-N)` references, and the corresponding `:root` declarations
-    // are prepended.
-    let (css_content, global_reactive_effects) =
-        if style.scope == StyleScope::Global && style.content.contains("$reactive(") {
-            let (cleaned_css, reactives) = extract_global_reactives(style.content);
-            // Build GlobalReactive StyleMacro list for emission
-            let macros: Vec<StyleMacro> = reactives
-                .into_iter()
-                .map(|(index, expr)| StyleMacro::GlobalReactive { index, expr })
-                .collect();
-            let (macro_css, macro_js) = emit_style_macros(&macros);
-            // Prepend the :root declarations to the cleaned CSS
-            let full_css = if macro_css.is_empty() {
-                cleaned_css
-            } else {
-                format!("{}\n{}", macro_css, cleaned_css)
-            };
-            (full_css, macro_js)
-        } else {
-            (style.content.to_string(), String::new())
-        };
-
-    // L2 (v0.6.0 roadmap): only the SCOPED (shadow-root) output is wrapped.
-    // Global `@style` blocks target `document`/`:root` and a layer wrapper has
-    // different cascade implications there (it would compete with the app's
-    // OWN document-level layers, not just other components) — out of scope
-    // for this item; see the tracking issue for the reasoning.
+fn emit_style_block(
+    style: &StyleBlock,
+    css_content: &str,
+    css_layer_name: &str,
+) -> (String, String) {
+    // process_style_content lowers macros first, then the layer wraps the result.
     let css_content = if style.scope == StyleScope::Scoped {
-        wrap_in_css_layer(&css_content, css_layer_name)
+        wrap_in_css_layer(css_content, css_layer_name)
     } else {
-        css_content
+        css_content.to_string()
     };
-
     // The CSS is interpolated into a JS template literal, so any backtick,
     // `${`, or backslash in the source CSS (e.g. inside a `/* ... */` comment
     // that mentions a `.foo` selector) would otherwise terminate the literal
@@ -306,7 +284,36 @@ fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String
             "document.adoptedStyleSheets = [...document.adoptedStyleSheets, __style__];".to_string()
         }
     };
-    (module_decl, setup_injection, global_reactive_effects)
+    (module_decl, setup_injection)
+}
+
+fn process_style_content(
+    style: &StyleBlock,
+) -> Result<(String, String), crate::types::CompileError> {
+    let (base_css, global_effects) =
+        if style.scope == StyleScope::Global && style.content.contains("$reactive(") {
+            let (cleaned_css, reactives) = extract_global_reactives(style.content);
+            let macros: Vec<StyleMacro> = reactives
+                .into_iter()
+                .map(|(index, expr)| StyleMacro::GlobalReactive { index, expr })
+                .collect();
+            let (macro_css, macro_js) = emit_style_macros(&macros);
+            let css = if macro_css.is_empty() {
+                cleaned_css
+            } else {
+                format!("{}\n{}", macro_css, cleaned_css)
+            };
+            (css, macro_js)
+        } else {
+            (style.content.to_string(), String::new())
+        };
+    let (css, macro_effects) = rewrite_style_macros(&base_css)?;
+    let effects = [global_effects, macro_effects]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok((css, effects))
 }
 
 /// L2 (v0.6.0 roadmap) — the `@layer` name a scoped `@style` block's CSS is
@@ -999,6 +1006,15 @@ pub(crate) fn emit_function_form(
     css_layer_name: &str,
 ) -> (String, IslandKind) {
     let raw_script = unit.source.script.unwrap_or("");
+    let (style_css_content, style_macro_effects) = unit
+        .source
+        .style
+        .as_ref()
+        .map(process_style_content)
+        .transpose()
+        .expect("style macros are validated by the SFC parser")
+        .unwrap_or_default();
+    let style_needs_effect = style_macro_effects.contains("effect(");
 
     // @agent `input` declarations lower to per-instance coercion bindings over
     // `ctx.attrs.<name>` (number/boolean/enum → `computed(...)`; string →
@@ -1116,7 +1132,10 @@ pub(crate) fn emit_function_form(
         // B4 — OR in aria's effect requirement so `effect` is imported when
         // $aria thunks are declared (even if no other effect is needed).
         // D5 — OR in form's effect requirement similarly.
-        helpers_needed.needs_effect || _aria_needs_effect || form_needs_effect,
+        helpers_needed.needs_effect
+            || _aria_needs_effect
+            || form_needs_effect
+            || style_needs_effect,
         raw_script,
         &si,
         helpers_needed.each_boundary,
@@ -1265,6 +1284,7 @@ pub(crate) fn emit_function_form(
         || _aria_needs_effect
         || form_needs_effect
         || si.needs_effect_for_macros
+        || style_needs_effect
         || raw_script.contains("effect(")
         || helpers_needed.link_element
         || helpers_needed.outlet_element
@@ -1337,12 +1357,16 @@ pub(crate) fn emit_function_form(
             .source
             .style
             .as_ref()
-            .map(|style| emit_ssr_css_export(style, css_layer_name))
+            .map(|style| emit_ssr_css_export(style, &style_css_content, css_layer_name))
             .unwrap_or_default();
         (css_export, String::new(), String::new())
     } else if let Some(style) = &unit.source.style {
-        let (decl, injection, reactive_effects) = emit_style_block(style, css_layer_name);
-        (decl, format!("  {}\n", injection), reactive_effects)
+        let (decl, injection) = emit_style_block(style, &style_css_content, css_layer_name);
+        (
+            decl,
+            format!("  {}\n", injection),
+            style_macro_effects.clone(),
+        )
     } else {
         (String::new(), String::new(), String::new())
     };

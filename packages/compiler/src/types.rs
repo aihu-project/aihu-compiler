@@ -639,6 +639,17 @@ pub enum StyleMacro {
     Media { breakpoint: String, css: String },
     /// `$when expr { css }`
     When { expr: String, css: String },
+    /// `$container(name?, query) { css }` (RFC-A5-022) — lowers to
+    /// `@container name (query) { css }`, or `@container (query) { css }`
+    /// when `name` is omitted.
+    Container {
+        name: Option<String>,
+        query: String,
+        css: String,
+    },
+    /// `$prefers(feature) { css }` (RFC-A5-023) — shorthand for `prefers-*`
+    /// media features. Lowers to `@media (prefers-feature: value) { css }`.
+    Prefers { feature: String, css: String },
 }
 
 // ─── v2 — @agent manifest macros (vestigial) ───────────────────────────────
