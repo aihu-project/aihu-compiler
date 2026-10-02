@@ -67,7 +67,7 @@
     }
   },
   "devDependencies": {
-    "@aihu/css-engine": "^0.6.1"
+    "@aihu/css-engine": "^0.7.0"
   },
   "description": "Single File Component (.aihu) compiler — Rust binary + JS glue.",
   "repository": {
