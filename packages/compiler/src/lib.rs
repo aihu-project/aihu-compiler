@@ -28,33 +28,36 @@ pub use ast_export::{
     build_owned_ast, compile_to_ast, SfcAstOwned, SfcAttrOwned, SfcIfBranch, SfcMacroValueOwned,
     SfcMetaOwned, SfcNodeOwned, SfcStyleBlockOwned, SfcStyleScope, AST_VERSION,
 };
-pub use codegen::{emit, emit_with_options, resolve_signals, EmitResult, IslandKind, SignalMap};
+pub use codegen::{
+    emit, emit_with_css_layer, emit_with_options, resolve_signals, validate_css_layer_name,
+    EmitResult, IslandKind, SignalMap, DEFAULT_CSS_LAYER_NAME,
+};
+pub use data::parse_data_literal;
 pub use envelope::{
     compile_envelope, format_compile_error, resolve_define_tag, Envelope, EnvelopeDiagnostic,
     EnvelopeOptions, TargetEmit, ENVELOPE_VERSION,
 };
 pub use expr::ExprParserMode;
-pub use parser::sfc;
-pub use parser::stream_macros;
-pub use parser::state_macros::{is_magna_origin, parse_state_macros};
-pub use parser::template::parse_template;
-pub use data::parse_data_literal;
 pub use extract::{resolve_extract, ExtractOrigin, ResolvedExtract};
+pub use parser::sfc;
+pub use parser::state_macros::{is_magna_origin, parse_state_macros};
+pub use parser::stream_macros;
+pub use parser::template::parse_template;
 pub use types::{
     ActionDecl, AgentBlock, AgentMacroDecl, AihuSource, Attr, AuthMacroKind, BuildTarget,
-    CollectionEntry,
-    CollectionKind, CompileError, CompileUnit, DataDecl, ExtractCall, ExtractDecl, ExtractRead,
-    InputDecl,
-    InputKind, MacroValue, RouteBlock,
-    ScriptMeta, SfcMeta, StateDecl, StateMacro, StreamBlock, StyleBlock, StyleMacro, StyleScope,
-    TemplateNode,
+    CollectionEntry, CollectionKind, CompileError, CompileUnit, DataDecl, ExtractCall, ExtractDecl,
+    ExtractRead, InputDecl, InputKind, MacroValue, RouteBlock, ScriptMeta, SfcMeta, StateDecl,
+    StateMacro, StreamBlock, StyleBlock, StyleMacro, StyleScope, TemplateNode,
 };
 
 pub fn compile(source: &str) -> Result<AihuSource<'_>, CompileError> {
     parser::sfc::parse(source)
 }
 
-pub fn compile_with_path<'a>(source: &'a str, file_path: Option<&str>) -> Result<AihuSource<'a>, CompileError> {
+pub fn compile_with_path<'a>(
+    source: &'a str,
+    file_path: Option<&str>,
+) -> Result<AihuSource<'a>, CompileError> {
     parser::sfc::parse_with_path(source, file_path)
 }
 
@@ -84,8 +87,8 @@ pub fn compile_full_with_options<'a>(
 ) -> Result<CompileUnit<'a>, CompileError> {
     let (template_ast, mut template_warnings) = match source.template {
         Some(tmpl) => {
-            let (ast, warnings) = parser::template::parse_template_with_diagnostics(tmpl)
-                .map_err(|err| *err)?;
+            let (ast, warnings) =
+                parser::template::parse_template_with_diagnostics(tmpl).map_err(|err| *err)?;
             (Some(ast), warnings)
         }
         None => (None, Vec::new()),
@@ -249,9 +252,7 @@ pub fn compile_full_with_options<'a>(
 /// Derivation positions (`derived`/`resource`/`stream`/`controller` bodies and
 /// `state` initializers) additionally reject ANY write to a reactive binding
 /// as C561 — the same category CO1 established for `$computed`/`$resource`.
-fn validate_wrapper_writes(
-    scan: &parser::state_wrappers::WrapperScan,
-) -> Result<(), CompileError> {
+fn validate_wrapper_writes(scan: &parser::state_wrappers::WrapperScan) -> Result<(), CompileError> {
     use crate::parser::state_macros::{meta_get, running_code};
 
     if scan.macros.is_empty() {
@@ -389,7 +390,12 @@ pub fn state_staleness_warnings(script: &str, template_ast: &[TemplateNode]) -> 
         }
     }
     let plain_joined = codegen::signals::plain_state_lines(script).join("\n");
-    written.extend(expr::detect_prop_writes(&plain_joined, "", false, &bare_set));
+    written.extend(expr::detect_prop_writes(
+        &plain_joined,
+        "",
+        false,
+        &bare_set,
+    ));
 
     // Template walk: handler expressions feed WRITES; everything else feeds
     // READS.
@@ -422,14 +428,17 @@ pub fn state_staleness_warnings(script: &str, template_ast: &[TemplateNode]) -> 
         };
         for node in nodes {
             match node {
-                TemplateNode::Element { attrs, children, .. }
-                | TemplateNode::MacroElement { attrs, children, .. } => {
+                TemplateNode::Element {
+                    attrs, children, ..
+                }
+                | TemplateNode::MacroElement {
+                    attrs, children, ..
+                } => {
                     for a in attrs {
                         match a {
                             Attr::Binding { name, expr } => {
-                                let is_event = name.starts_with("on")
-                                    && name.len() > 2
-                                    && !name.contains('-');
+                                let is_event =
+                                    name.starts_with("on") && name.len() > 2 && !name.contains('-');
                                 if is_event {
                                     written.extend(expr::detect_prop_writes(
                                         expr, "", false, bare_set,
@@ -462,7 +471,13 @@ pub fn state_staleness_warnings(script: &str, template_ast: &[TemplateNode]) -> 
                         walk(body, bare_set, bare_lets, written, reads);
                     }
                 }
-                TemplateNode::EachBlock { list_expr, key_expr, body, empty_body, .. } => {
+                TemplateNode::EachBlock {
+                    list_expr,
+                    key_expr,
+                    body,
+                    empty_body,
+                    ..
+                } => {
                     read_scan(list_expr, reads);
                     if let Some(k) = key_expr {
                         read_scan(k, reads);
@@ -581,18 +596,28 @@ fn validate_extract_composition(source: &AihuSource) -> Result<(), CompileError>
 /// governed route's prop type, so containment is exact enough and cannot
 /// false-negative. Ungoverned routes are untouched (no `data:` → no check).
 fn validate_data_composition(source: &AihuSource) -> Result<(), CompileError> {
-    let governed = source.route.as_ref().and_then(|r| r.data.as_ref()).is_some();
+    let governed = source
+        .route
+        .as_ref()
+        .and_then(|r| r.data.as_ref())
+        .is_some();
     if !governed {
         return Ok(());
     }
-    let Some(script) = source.script else { return Ok(()) };
+    let Some(script) = source.script else {
+        return Ok(());
+    };
     let Ok(macros) = parser::state_macros::parse_state_macros(script) else {
         // A hard @state parse error is surfaced by the macro-validation block
         // above; nothing to check here.
         return Ok(());
     };
     for m in &macros {
-        let StateMacro::Collection { kind: CollectionKind::Prop, entries } = m else {
+        let StateMacro::Collection {
+            kind: CollectionKind::Prop,
+            entries,
+        } = m
+        else {
             continue;
         };
         for e in entries {
@@ -790,19 +815,29 @@ fn validate_ref_gating(nodes: &[TemplateNode]) -> Result<(), CompileError> {
                  `${gate}`-gated element from that ref"
             )),
             from: Some(format!("<{tag} $ref={{…}} ${gate}=…>")),
-            to: Some(format!("<{tag} ${gate}=…> inside an ancestor that carries `$ref`")),
+            to: Some(format!(
+                "<{tag} ${gate}=…> inside an ancestor that carries `$ref`"
+            )),
         }
     }
 
     for node in nodes {
         match node {
-            TemplateNode::Element { tag, attrs, children } => {
+            TemplateNode::Element {
+                tag,
+                attrs,
+                children,
+            } => {
                 if let Some(gate) = ref_gate_conflict(attrs) {
                     return Err(ref_gating_error(gate, tag));
                 }
                 validate_ref_gating(children)?;
             }
-            TemplateNode::MacroElement { name, attrs, children } => {
+            TemplateNode::MacroElement {
+                name,
+                attrs,
+                children,
+            } => {
                 if let Some(gate) = ref_gate_conflict(attrs) {
                     return Err(ref_gating_error(gate, &format!("${name}")));
                 }
@@ -813,7 +848,9 @@ fn validate_ref_gating(nodes: &[TemplateNode]) -> Result<(), CompileError> {
                     validate_ref_gating(body)?;
                 }
             }
-            TemplateNode::EachBlock { body, empty_body, .. } => {
+            TemplateNode::EachBlock {
+                body, empty_body, ..
+            } => {
                 validate_ref_gating(body)?;
                 if let Some(empty) = empty_body {
                     validate_ref_gating(empty)?;
@@ -827,7 +864,6 @@ fn validate_ref_gating(nodes: &[TemplateNode]) -> Result<(), CompileError> {
     }
     Ok(())
 }
-
 
 /// CO1 — `$prop` write diagnostics (C560 / C561).
 ///
@@ -852,7 +888,11 @@ fn validate_prop_writes(macros: &[StateMacro]) -> Result<(), CompileError> {
     // `$computed` entries and lifted `signal()` bindings.
     let mut prop_names: HashSet<String> = HashSet::new();
     for m in macros {
-        if let StateMacro::Collection { kind: CollectionKind::Prop, entries } = m {
+        if let StateMacro::Collection {
+            kind: CollectionKind::Prop,
+            entries,
+        } = m
+        {
             for e in entries {
                 prop_names.insert(e.name.clone());
             }
@@ -865,9 +905,13 @@ fn validate_prop_writes(macros: &[StateMacro]) -> Result<(), CompileError> {
     let targets = expr::PropWriteTargets { props: &props };
 
     for m in macros {
-        let StateMacro::Collection { kind, entries } = m else { continue };
+        let StateMacro::Collection { kind, entries } = m else {
+            continue;
+        };
         for entry in entries {
-            let Some(arrow) = running_code(entry) else { continue };
+            let Some(arrow) = running_code(entry) else {
+                continue;
+            };
             let body = arrow_body(arrow).unwrap_or_else(|| arrow.to_string());
             let args = arrow_args(arrow).unwrap_or_default();
             let is_async = arrow_is_async(arrow);
@@ -908,7 +952,9 @@ fn validate_prop_writes(macros: &[StateMacro]) -> Result<(), CompileError> {
                                  `$action` entry"
                             )),
                             from: Some(format!("{name} = …")),
-                            to: Some(format!("$action: {{ set{name}: (v) => {{ {name}.set(v) }} }}")),
+                            to: Some(format!(
+                                "$action: {{ set{name}: (v) => {{ {name}.set(v) }} }}"
+                            )),
                             ..Default::default()
                         });
                     }

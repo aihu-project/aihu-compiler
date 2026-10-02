@@ -38,7 +38,11 @@ fn emit_machine_error(e: &aihu_compiler::CompileError) {
 
     let json = format!(
         r#"{{"code":"{}","message":"{}","from":{},"to":{},"range":{}}}"#,
-        escape(code), message, from, to, range_json
+        escape(code),
+        message,
+        from,
+        to,
+        range_json
     );
 
     let _ = writeln!(std::io::stderr(), "{}", json);
@@ -203,6 +207,27 @@ fn main() {
         }
     };
 
+    // L2 (v0.6.0 roadmap): `--css-layer-name <name>` overrides the `@layer`
+    // name a scoped `@style` block's CSS is wrapped in. Omitted → the
+    // compiled-in default (`DEFAULT_CSS_LAYER_NAME`, "aihu-component").
+    let css_layer_name: Option<String> = {
+        let pos = args.iter().position(|a| a == "--css-layer-name");
+        match pos {
+            Some(i) if i + 1 < args.len() => Some(args[i + 1].clone()),
+            Some(_) => {
+                eprintln!("error: --css-layer-name requires a value");
+                process::exit(1);
+            }
+            None => None,
+        }
+    };
+    if let Some(name) = css_layer_name.as_deref() {
+        if let Err(message) = aihu_compiler::validate_css_layer_name(name) {
+            eprintln!("error: {message}");
+            process::exit(1);
+        }
+    }
+
     // Parse --out <dir>
     let out_dir: Option<String> = {
         let pos = args.iter().position(|a| a == "--out");
@@ -232,7 +257,10 @@ fn main() {
                     "server" => aihu_compiler::BuildTarget::Server,
                     "universal" => aihu_compiler::BuildTarget::Universal,
                     other => {
-                        eprintln!("error: unknown --target '{}' (expected: client|server|universal)", other);
+                        eprintln!(
+                            "error: unknown --target '{}' (expected: client|server|universal)",
+                            other
+                        );
                         process::exit(1);
                     }
                 }
@@ -360,6 +388,9 @@ fn main() {
         if !opts.strict_templates {
             opts.strict_templates = args.iter().any(|a| a == "--strict-templates");
         }
+        if opts.css_layer_name.is_none() {
+            opts.css_layer_name = css_layer_name.clone();
+        }
         let envelope =
             aihu_compiler::compile_envelope(&source, &opts).unwrap_or_else(|e| on_err(&e));
         match serde_json::to_string(&envelope) {
@@ -460,34 +491,37 @@ fn main() {
         process::exit(0);
     }
 
-    let parsed = aihu_compiler::sfc::parse_with_path(
-        &source,
-        file_path_opt.as_deref(),
-    ).unwrap_or_else(|e| {
-        if machine_errors {
-            emit_machine_error(&e);
-            eprintln!("{}:{}: {}", file_label, e.line, e.message);
-        } else {
-            render_human_error(&e, &file_label, &source);
-        }
-        process::exit(1);
-    });
+    let parsed = aihu_compiler::sfc::parse_with_path(&source, file_path_opt.as_deref())
+        .unwrap_or_else(|e| {
+            if machine_errors {
+                emit_machine_error(&e);
+                eprintln!("{}:{}: {}", file_label, e.line, e.message);
+            } else {
+                render_human_error(&e, &file_label, &source);
+            }
+            process::exit(1);
+        });
 
-    let unit = aihu_compiler::compile_full_with_options(&parsed, target, expr_parser).unwrap_or_else(|e| {
-        if machine_errors {
-            emit_machine_error(&e);
-            eprintln!("{}:{}: {}", file_label, e.line, e.message);
-        } else {
-            render_human_error(&e, &file_label, &source);
-        }
-        process::exit(1);
-    });
+    let unit = aihu_compiler::compile_full_with_options(&parsed, target, expr_parser)
+        .unwrap_or_else(|e| {
+            if machine_errors {
+                emit_machine_error(&e);
+                eprintln!("{}:{}: {}", file_label, e.line, e.message);
+            } else {
+                render_human_error(&e, &file_label, &source);
+            }
+            process::exit(1);
+        });
 
     // Tag name resolution (OQ-C6):
     // 1. @meta { name: "..." } — explicit override (highest priority)
     // 2. @route { name: "..." } — derived from route block (e.g. "blog-index")
     // 3. file_stem — basename of the source file (fallback)
-    let tag_name = unit.source.meta.name.clone()
+    let tag_name = unit
+        .source
+        .meta
+        .name
+        .clone()
         .or_else(|| unit.source.route.as_ref().and_then(|r| r.name.clone()))
         .unwrap_or(file_stem);
 
@@ -501,7 +535,22 @@ fn main() {
     // component-prop type layer on. Default-off keeps the type-check surface
     // byte-identical (the flag affects ONLY `sidecar_ts`, never the JS).
     let strict_templates = args.iter().any(|a| a == "--strict-templates");
-    let result = aihu_compiler::emit_with_options(&unit, &tag_name, strict_templates);
+    let on_err = |e: &aihu_compiler::CompileError| -> ! {
+        if machine_errors {
+            emit_machine_error(e);
+            eprintln!("{}:{}: {}", file_label, e.line, e.message);
+        } else {
+            render_human_error(e, &file_label, &source);
+        }
+        process::exit(1);
+    };
+    let result = aihu_compiler::emit_with_css_layer(
+        &unit,
+        &tag_name,
+        strict_templates,
+        css_layer_name.as_deref(),
+    )
+    .unwrap_or_else(|e| on_err(&e));
 
     // B3b — optional `--sidecar-out <path>` writes the per-SFC `.aihu.ts`
     // sidecar to that exact path. Used by the Vite plugin to write the
@@ -555,7 +604,11 @@ fn main() {
             if let Some(parent) = std::path::Path::new(path).parent() {
                 if !parent.as_os_str().is_empty() {
                     std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                        eprintln!("error creating sidecar parent '{}': {}", parent.display(), e);
+                        eprintln!(
+                            "error creating sidecar parent '{}': {}",
+                            parent.display(),
+                            e
+                        );
                         process::exit(1);
                     });
                 }
