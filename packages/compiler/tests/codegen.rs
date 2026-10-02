@@ -245,12 +245,21 @@ fn style_scoped_wraps_configured_css_layer_name() {
 
 #[test]
 fn css_layer_name_rejects_malformed_identifiers() {
-    for name in ["x{}*{color:red}", "a;b", "bad\nname", "", ".foo", "foo."] {
+    for name in [
+        "x{}*{color:red}",
+        "a;b",
+        "bad\nname",
+        "",
+        ".foo",
+        "foo.",
+        "-1invalid",
+    ] {
         let err = aihu_compiler::validate_css_layer_name(name)
             .expect_err("malformed CSS layer names must be rejected before emission");
         assert!(err.contains("invalid CSS layer name"), "{err}");
     }
     assert!(aihu_compiler::validate_css_layer_name("my-app.components").is_ok());
+    assert!(aihu_compiler::validate_css_layer_name("--app.-webkit").is_ok());
 }
 
 #[test]

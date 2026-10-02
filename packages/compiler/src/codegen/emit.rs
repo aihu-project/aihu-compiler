@@ -186,9 +186,13 @@ pub fn validate_css_layer_name(name: &str) -> Result<(), String> {
         let Some(first) = chars.next() else {
             return false;
         };
-        let starts = first == '_' || first.is_ascii_alphabetic() || first == '-';
-        let valid_rest = chars.all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric());
-        starts && valid_rest && (first != '-' || part.len() > 1)
+        let is_name_start = |ch: char| ch == '_' || ch.is_ascii_alphabetic() || !ch.is_ascii();
+        let starts = if first == '-' {
+            chars.next().is_some_and(|ch| ch == '-' || is_name_start(ch))
+        } else {
+            is_name_start(first)
+        };
+        starts && chars.all(|ch| is_name_start(ch) || ch == '-' || ch.is_ascii_digit())
     };
     if name.split('.').all(is_ident) && !name.is_empty() {
         Ok(())
