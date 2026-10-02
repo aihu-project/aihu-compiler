@@ -214,6 +214,9 @@ fn target_key(t: BuildTarget) -> &'static str {
 /// name` → `opts.tag` (the stdin `--tag` stem) → the `opts.path` basename →
 /// `"Component"`, then the O1a kebab normalization.
 pub fn compile_envelope(source: &str, opts: &EnvelopeOptions) -> Result<Envelope, CompileError> {
+    if let Some(name) = opts.css_layer_name.as_deref() {
+        crate::validate_css_layer_name(name).map_err(bad_option)?;
+    }
     // ── Resolve options ─────────────────────────────────────────────────────
     let expr_parser = match opts.expr_parser.as_deref() {
         Some(v) => ExprParserMode::parse(v).ok_or_else(|| {
@@ -296,12 +299,13 @@ pub fn compile_envelope(source: &str, opts: &EnvelopeOptions) -> Result<Envelope
     if needs_emit {
         for t in &targets {
             unit.target = *t;
-            let result = crate::emit_with_options(
+            let result = crate::emit_with_css_layer(
                 &unit,
                 &tag_name,
                 opts.strict_templates,
                 opts.css_layer_name.as_deref(),
-            );
+            )
+            .map_err(|e| e)?;
             // `route_json` is target-independent (emit_route_json reads the
             // @route block + component tags + resolved extract, none of which
             // branch on target) — capture it from the first emit that has it.
@@ -310,7 +314,11 @@ pub fn compile_envelope(source: &str, opts: &EnvelopeOptions) -> Result<Envelope
             }
             if want("js") || want("manifest") {
                 let te = TargetEmit {
-                    island: if want("js") { Some(result.island) } else { None },
+                    island: if want("js") {
+                        Some(result.island)
+                    } else {
+                        None
+                    },
                     js: if want("js") { Some(result.js) } else { None },
                     manifest: if want("manifest") && !result.manifest_json.is_empty() {
                         Some(result.manifest_json)

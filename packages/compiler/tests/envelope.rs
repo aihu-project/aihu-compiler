@@ -346,3 +346,23 @@ fn envelope_css_layer_name_wraps_scoped_style_output() {
         custom_js
     );
 }
+
+#[test]
+fn envelope_rejects_invalid_css_layer_names_before_emission() {
+    let src = "@template { <span>hi</span> }\n@style { span { color:red; } }";
+    for name in ["x{}*{color:red}", "a;b", "bad\nname", ""] {
+        let err = compile_envelope(
+            src,
+            &EnvelopeOptions {
+                css_layer_name: Some(name.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("invalid layer names must be rejected during option parsing");
+        assert!(
+            err.message.contains("invalid CSS layer name"),
+            "{}",
+            err.message
+        );
+    }
+}

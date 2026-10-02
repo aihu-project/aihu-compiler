@@ -1,8 +1,18 @@
-use super::mcp_emit::{build_dispatcher_registration_stmt, build_server_binding_registration_stmt, collect_agent_members, emit_agent_binding_export, emit_agent_bindings, emit_agent_client_dispatcher, emit_agent_metadata_registration};
+use super::mcp_emit::{
+    build_dispatcher_registration_stmt, build_server_binding_registration_stmt,
+    collect_agent_members, emit_agent_binding_export, emit_agent_bindings,
+    emit_agent_client_dispatcher, emit_agent_metadata_registration,
+};
 use super::sidecar_json::{collect_component_tags, emit_manifest, emit_route_json};
 use super::sidecar_ts::emit_sidecar_ts;
-use super::state_emit::{collect_prop_entries, emit_aria_wiring, emit_form_wiring, emit_prop_bindings, emit_props_config, emit_state_macro_code, process_state_body};
-use super::template_emit::{anchor_is_enhanced, apply_emit_lowering_nodes, apply_state_write_lowering_nodes, collect_event_names, emit_nodes};
+use super::state_emit::{
+    collect_prop_entries, emit_aria_wiring, emit_form_wiring, emit_prop_bindings,
+    emit_props_config, emit_state_macro_code, process_state_body,
+};
+use super::template_emit::{
+    anchor_is_enhanced, apply_emit_lowering_nodes, apply_state_write_lowering_nodes,
+    collect_event_names, emit_nodes,
+};
 use crate::codegen::signals::SignalMap;
 use crate::parser::style_macros::{emit_style_macros, extract_global_reactives};
 use crate::types::{
@@ -100,7 +110,10 @@ pub(crate) enum AgentReg {
 /// (`return base_js.to_string()`) silently lacked. Returns `Err` (which the
 /// caller turns into a hard compile failure) rather than shipping an agent
 /// component whose `LiveBinding` would never register.
-pub(crate) fn verify_agent_registration(agent_reg: AgentReg, setup_body: &str) -> Result<(), String> {
+pub(crate) fn verify_agent_registration(
+    agent_reg: AgentReg,
+    setup_body: &str,
+) -> Result<(), String> {
     let expected = match agent_reg {
         AgentReg::None => return Ok(()),
         AgentReg::ClientDispatcher => "_registerAgentDispatcher(",
@@ -164,6 +177,28 @@ fn wrap_in_css_layer(css: &str, layer_name: &str) -> String {
     format!("@layer {layer_name} {{\n{css}\n}}")
 }
 
+/// CSS layer names are one or more CSS identifiers separated by dots. Accept
+/// the unescaped ASCII identifier subset used by compiler options; rejecting
+/// escapes keeps option parsing straightforward and prevents CSS injection.
+pub fn validate_css_layer_name(name: &str) -> Result<(), String> {
+    let is_ident = |part: &str| {
+        let mut chars = part.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        let starts = first == '_' || first.is_ascii_alphabetic() || first == '-';
+        let valid_rest = chars.all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric());
+        starts && valid_rest && (first != '-' || part.len() > 1)
+    };
+    if name.split('.').all(is_ident) && !name.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid CSS layer name '{name}': expected dot-separated CSS identifiers (letters, digits after the first character, '_' or '-')"
+        ))
+    }
+}
+
 /// The component's own CSS, exported as a plain string on the SERVER target.
 ///
 /// The client declaration is elided there because `new CSSStyleSheet()` is a
@@ -201,32 +236,42 @@ fn emit_ssr_css_export(style: &StyleBlock, css_layer_name: &str) -> String {
     )
 }
 
-fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String) {
+/// Returns `(module_decl, setup_injection, reactive_effects)`.
+///
+/// FEL-410: `reactive_effects` (the `effect(() => document.documentElement...)`
+/// lines for `$reactive(expr)` inside `$global { }`) is split out from
+/// `setup_injection` (the non-reactive `adoptedStyleSheets` wiring) so the
+/// caller can emit it AFTER the component's `@state` declarations. `effect()`
+/// runs its callback synchronously at registration to track dependencies; if
+/// the referenced state (e.g. `theme` in `$reactive(theme().primary)`) is
+/// declared later in the setup body, that first synchronous run hits the
+/// temporal dead zone and throws. `setup_injection` itself has no such
+/// dependency, so it can stay at the top of the body.
+fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String, String) {
     // Amendment 02: when the style block is global and the content contains
     // `$reactive(expr)` call patterns, extract them and emit JS effects targeting
     // `document.documentElement`. The CSS content has the calls replaced with
     // `var(--reactive-global-N)` references, and the corresponding `:root` declarations
     // are prepended.
-    let (css_content, global_reactive_effects) = if style.scope == StyleScope::Global
-        && style.content.contains("$reactive(")
-    {
-        let (cleaned_css, reactives) = extract_global_reactives(style.content);
-        // Build GlobalReactive StyleMacro list for emission
-        let macros: Vec<StyleMacro> = reactives
-            .into_iter()
-            .map(|(index, expr)| StyleMacro::GlobalReactive { index, expr })
-            .collect();
-        let (macro_css, macro_js) = emit_style_macros(&macros);
-        // Prepend the :root declarations to the cleaned CSS
-        let full_css = if macro_css.is_empty() {
-            cleaned_css
+    let (css_content, global_reactive_effects) =
+        if style.scope == StyleScope::Global && style.content.contains("$reactive(") {
+            let (cleaned_css, reactives) = extract_global_reactives(style.content);
+            // Build GlobalReactive StyleMacro list for emission
+            let macros: Vec<StyleMacro> = reactives
+                .into_iter()
+                .map(|(index, expr)| StyleMacro::GlobalReactive { index, expr })
+                .collect();
+            let (macro_css, macro_js) = emit_style_macros(&macros);
+            // Prepend the :root declarations to the cleaned CSS
+            let full_css = if macro_css.is_empty() {
+                cleaned_css
+            } else {
+                format!("{}\n{}", macro_css, cleaned_css)
+            };
+            (full_css, macro_js)
         } else {
-            format!("{}\n{}", macro_css, cleaned_css)
+            (style.content.to_string(), String::new())
         };
-        (full_css, macro_js)
-    } else {
-        (style.content.to_string(), String::new())
-    };
 
     // L2 (v0.6.0 roadmap): only the SCOPED (shadow-root) output is wrapped.
     // Global `@style` blocks target `document`/`:root` and a layer wrapper has
@@ -249,7 +294,7 @@ fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String
         "const __style__ = new CSSStyleSheet();\n__style__.replaceSync(`{}`);\n",
         escaped_css
     );
-    let mut setup_injection = match style.scope {
+    let setup_injection = match style.scope {
         StyleScope::Scoped => {
             "(ctx.host as ShadowRoot).adoptedStyleSheets = [__style__];".to_string()
         }
@@ -257,13 +302,7 @@ fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String
             "document.adoptedStyleSheets = [...document.adoptedStyleSheets, __style__];".to_string()
         }
     };
-    // Append any document.documentElement effects after the style injection
-    if !global_reactive_effects.is_empty() {
-        setup_injection.push('\n');
-        setup_injection.push_str("  ");
-        setup_injection.push_str(&global_reactive_effects);
-    }
-    (module_decl, setup_injection)
+    (module_decl, setup_injection, global_reactive_effects)
 }
 
 /// L2 (v0.6.0 roadmap) — the `@layer` name a scoped `@style` block's CSS is
@@ -272,7 +311,7 @@ fn emit_style_block(style: &StyleBlock, css_layer_name: &str) -> (String, String
 pub const DEFAULT_CSS_LAYER_NAME: &str = "aihu-component";
 
 pub fn emit(unit: &CompileUnit, tag_name: &str) -> EmitResult {
-    emit_with_options(unit, tag_name, false, None)
+    emit_with_options(unit, tag_name, false)
 }
 
 /// #486 step 4 — `strict_templates` switches the sidecar's attribute/
@@ -293,14 +332,28 @@ pub fn emit(unit: &CompileUnit, tag_name: &str) -> EmitResult {
 ///
 /// `css_layer_name` (L2, v0.6.0 roadmap): the `@layer` name a scoped `@style`
 /// block's CSS is wrapped in. `None` falls back to [`DEFAULT_CSS_LAYER_NAME`].
-pub fn emit_with_options(
+/// Backward-compatible options entry point. Existing Rust callers receive the
+/// default CSS layer name; use [`emit_with_css_layer`] to configure it.
+pub fn emit_with_options(unit: &CompileUnit, tag_name: &str, strict_templates: bool) -> EmitResult {
+    emit_with_css_layer(unit, tag_name, strict_templates, None)
+        .expect("the built-in CSS layer name is valid")
+}
+
+/// Emit with an optional configured CSS layer name. Invalid names return a
+/// diagnostic instead of being interpolated into generated CSS.
+pub fn emit_with_css_layer(
     unit: &CompileUnit,
     tag_name: &str,
     strict_templates: bool,
     css_layer_name: Option<&str>,
-) -> EmitResult {
+) -> Result<EmitResult, crate::types::CompileError> {
     let target = unit.target;
     let css_layer_name = css_layer_name.unwrap_or(DEFAULT_CSS_LAYER_NAME);
+    validate_css_layer_name(css_layer_name).map_err(|message| crate::types::CompileError {
+        message,
+        code: Some("C900".to_string()),
+        ..Default::default()
+    })?;
 
     // GX Phase 1 (#437-GX) — resolve the ONE effective extract policy
     // (declaration → component-$scope derivation → the ratified default
@@ -393,7 +446,11 @@ pub fn emit_with_options(
     // under the host-less SSR context as a non-agent component's own state. Same
     // for an `@agent` block that carries only policy ($scope/$rate-limit) with no
     // `$input`s. Both now get the standalone SSR entry.
-    let agent_has_attr_inputs = unit.source.agent.as_ref().is_some_and(|a| !a.inputs.is_empty());
+    let agent_has_attr_inputs = unit
+        .source
+        .agent
+        .as_ref()
+        .is_some_and(|a| !a.inputs.is_empty());
     let emit_ssr_entry = target == BuildTarget::Server && !agent_has_attr_inputs;
 
     // Wave 3c — island classification, hoisted out of the `js` block below so it
@@ -596,7 +653,13 @@ pub fn emit_with_options(
     // --noEmit` over `**/*.aihu.ts` checks template type-safety end-to-end.
     let sidecar_ts = emit_sidecar_ts(unit, tag_name, strict_templates);
 
-    EmitResult { js, manifest_json, route_json, sidecar_ts, island: island_kind }
+    Ok(EmitResult {
+        js,
+        manifest_json,
+        route_json,
+        sidecar_ts,
+        island: island_kind,
+    })
 }
 
 // ─── v0.4.0 — @stream block binding export ───────────────────────────────────
@@ -719,17 +782,24 @@ fn scan_attr_helpers(attrs: &[Attr], h: &mut NeededHelpers) {
 fn collect_helpers_recursive(nodes: &[TemplateNode], h: &mut NeededHelpers) {
     for node in nodes {
         match node {
-            TemplateNode::MacroElement { name, attrs, children, .. } => {
+            TemplateNode::MacroElement {
+                name,
+                attrs,
+                children,
+                ..
+            } => {
                 match name.as_str() {
                     "slot" => h.slot_boundary = true,
                     "suspense" => h.suspense_boundary = true,
                     "shield" => h.shield_boundary = true,
                     "guard" => {
                         // v0.3.0: detect scope-form vs check-form.
-                        let has_scope = attrs.iter().any(|a| matches!(
-                            a,
-                            Attr::Static { name, .. } if name == "scope"
-                        ));
+                        let has_scope = attrs.iter().any(|a| {
+                            matches!(
+                                a,
+                                Attr::Static { name, .. } if name == "scope"
+                            )
+                        });
                         if has_scope {
                             h.guard_scope_boundary = true;
                             h.if_boundary = true; // needs `when()` from arbor
@@ -768,7 +838,12 @@ fn collect_helpers_recursive(nodes: &[TemplateNode], h: &mut NeededHelpers) {
                 scan_attr_helpers(attrs, h);
                 collect_helpers_recursive(children, h);
             }
-            TemplateNode::Element { tag, attrs, children, .. } => {
+            TemplateNode::Element {
+                tag,
+                attrs,
+                children,
+                ..
+            } => {
                 // §2.6 — an enhanced <a> emits createLinkBoundary at its call
                 // site, so the helper (and the router namespace import) must
                 // be collected exactly as for the retired <$link>.
@@ -787,7 +862,9 @@ fn collect_helpers_recursive(nodes: &[TemplateNode], h: &mut NeededHelpers) {
                     collect_helpers_recursive(body, h);
                 }
             }
-            TemplateNode::EachBlock { body, empty_body, .. } => {
+            TemplateNode::EachBlock {
+                body, empty_body, ..
+            } => {
                 h.each_boundary = true;
                 collect_helpers_recursive(body, h);
                 if let Some(eb) = empty_body {
@@ -1247,7 +1324,7 @@ pub(crate) fn emit_function_form(
     // a compiled artifact un-importable in plain Node/Bun (`new
     // CSSStyleSheet()` + `document.adoptedStyleSheets`). Gate it OUT of the
     // standalone-SSR artifacts entirely.
-    let (module_decl, style_injection) = if ssr_no_dom {
+    let (module_decl, style_injection, style_reactive_effects) = if ssr_no_dom {
         // The CLIENT declaration stays elided (CSSStyleSheet is a DOM
         // dependency), but the CSS itself now rides the module channel as a
         // plain string so a declarative shadow root can carry its own styles.
@@ -1258,12 +1335,12 @@ pub(crate) fn emit_function_form(
             .as_ref()
             .map(|style| emit_ssr_css_export(style, css_layer_name))
             .unwrap_or_default();
-        (css_export, String::new())
+        (css_export, String::new(), String::new())
     } else if let Some(style) = &unit.source.style {
-        let (decl, injection) = emit_style_block(style, css_layer_name);
-        (decl, format!("  {}\n", injection))
+        let (decl, injection, reactive_effects) = emit_style_block(style, css_layer_name);
+        (decl, format!("  {}\n", injection), reactive_effects)
     } else {
-        (String::new(), String::new())
+        (String::new(), String::new(), String::new())
     };
 
     // `ctx` is only needed for the style injection (`ctx.host`), the
@@ -1313,7 +1390,11 @@ pub(crate) fn emit_function_form(
     };
     // #487 §4.3 — the `state` sibling of the CO1 helper.
     let prop_upd_decl = if needs_state_upd_helper {
-        format!("{}  {}\n", prop_upd_decl, crate::expr::STATE_UPDATE_HELPER_DECL)
+        format!(
+            "{}  {}\n",
+            prop_upd_decl,
+            crate::expr::STATE_UPDATE_HELPER_DECL
+        )
     } else {
         prop_upd_decl
     };
@@ -1371,6 +1452,16 @@ pub(crate) fn emit_function_form(
         if !plain_body.is_empty() {
             b.push_str(&plain_body);
             b.push_str("\n\n");
+        }
+        // FEL-410: `$reactive(expr)` global-style effects (Amendment 02,
+        // `document.documentElement` target) are emitted AFTER plain_body for
+        // the same reason macro_code is below — the effect's callback runs
+        // synchronously at registration and closes over `expr`'s state, which
+        // must already be declared. See the `emit_style_block` doc comment.
+        if !style_reactive_effects.is_empty() {
+            b.push_str("  ");
+            b.push_str(&style_reactive_effects);
+            b.push_str("\n");
         }
         // FEL-441: hoisted owner-scope `$ref` onMount registrations. Emitted
         // AFTER plain_body (the holder onMount closes over the ref's target
@@ -1692,7 +1783,11 @@ fn parse_import_line(line: &str) -> Option<ParsedImport> {
         let s = after_from
             .strip_prefix('\'')
             .and_then(|s| s.strip_suffix('\''))
-            .or_else(|| after_from.strip_prefix('"').and_then(|s| s.strip_suffix('"')))?;
+            .or_else(|| {
+                after_from
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+            })?;
         (trimmed[..from_idx].trim(), s.to_string())
     };
     let (head, type_only) = if let Some(h) = rest.strip_prefix("import type ") {
@@ -1713,7 +1808,12 @@ fn parse_import_line(line: &str) -> Option<ParsedImport> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        return Some(ParsedImport { type_only, source, names, raw_passthrough: None });
+        return Some(ParsedImport {
+            type_only,
+            source,
+            names,
+            raw_passthrough: None,
+        });
     }
     Some(ParsedImport {
         type_only,
@@ -1733,8 +1833,8 @@ fn merge_imports(framework: &str, user: &[String]) -> String {
         std::collections::HashMap::new();
 
     let push = |imp: ParsedImport,
-                    buckets: &mut Vec<ParsedImport>,
-                    bucket_idx: &mut std::collections::HashMap<(String, bool), usize>| {
+                buckets: &mut Vec<ParsedImport>,
+                bucket_idx: &mut std::collections::HashMap<(String, bool), usize>| {
         if imp.raw_passthrough.is_some() || imp.names.is_empty() {
             buckets.push(imp);
             return;
@@ -1783,7 +1883,12 @@ fn merge_imports(framework: &str, user: &[String]) -> String {
             continue;
         } else {
             let kw = if b.type_only { "import type" } else { "import" };
-            out.push(format!("{} {{ {} }} from '{}'", kw, b.names.join(", "), b.source));
+            out.push(format!(
+                "{} {{ {} }} from '{}'",
+                kw,
+                b.names.join(", "),
+                b.source
+            ));
         }
     }
     out.join("\n")
@@ -1826,19 +1931,37 @@ fn build_function_imports(
     if !signal_map.0.is_empty() {
         lines.push("import type { Signal } from '@aihu/signals'".to_string());
         let mut sig_items: Vec<&str> = vec!["signal"];
-        if si.needs_computed { sig_items.push("computed"); }
-        if emit_effect { sig_items.push("effect"); }
-        if si.needs_batch { sig_items.push("batch"); }
-        lines.push(format!("import {{ {} }} from '@aihu/signals'", sig_items.join(", ")));
+        if si.needs_computed {
+            sig_items.push("computed");
+        }
+        if emit_effect {
+            sig_items.push("effect");
+        }
+        if si.needs_batch {
+            sig_items.push("batch");
+        }
+        lines.push(format!(
+            "import {{ {} }} from '@aihu/signals'",
+            sig_items.join(", ")
+        ));
     } else {
         // No signals in map, but may still need computed/effect/batch
         let mut sig_items: Vec<&str> = Vec::new();
-        if si.needs_computed { sig_items.push("computed"); }
-        if emit_effect { sig_items.push("effect"); }
-        if si.needs_batch { sig_items.push("batch"); }
+        if si.needs_computed {
+            sig_items.push("computed");
+        }
+        if emit_effect {
+            sig_items.push("effect");
+        }
+        if si.needs_batch {
+            sig_items.push("batch");
+        }
         if !sig_items.is_empty() {
             lines.push("import type { Signal } from '@aihu/signals'".to_string());
-            lines.push(format!("import {{ {} }} from '@aihu/signals'", sig_items.join(", ")));
+            lines.push(format!(
+                "import {{ {} }} from '@aihu/signals'",
+                sig_items.join(", ")
+            ));
         }
     }
 
@@ -1846,20 +1969,34 @@ fn build_function_imports(
     // helpers (which call them at component setup time).
     let mut rt_items: Vec<String> =
         vec!["defineComponent".to_string(), "defineElement".to_string()];
-    let needs_on_mount_for_router =
-        helpers.router_element || helpers.link_element || helpers.outlet_element || helpers.navigate_element;
+    let needs_on_mount_for_router = helpers.router_element
+        || helpers.link_element
+        || helpers.outlet_element
+        || helpers.navigate_element;
     let needs_on_cleanup_for_router = helpers.router_element || helpers.outlet_element;
-    if si.needs_on_mount || needs_on_mount_for_router || helpers.needs_on_mount_for_directives { rt_items.push("onMount".to_string()); }
-    if si.needs_on_cleanup || needs_on_cleanup_for_router { rt_items.push("onCleanup".to_string()); }
+    if si.needs_on_mount || needs_on_mount_for_router || helpers.needs_on_mount_for_directives {
+        rt_items.push("onMount".to_string());
+    }
+    if si.needs_on_cleanup || needs_on_cleanup_for_router {
+        rt_items.push("onCleanup".to_string());
+    }
     // R2 (Director r6 §3): $lifecycle four-callback extension imports.
-    if si.needs_on_adopt { rt_items.push("onAdopt".to_string()); }
-    if si.needs_on_attribute_change { rt_items.push("onAttributeChange".to_string()); }
+    if si.needs_on_adopt {
+        rt_items.push("onAdopt".to_string());
+    }
+    if si.needs_on_attribute_change {
+        rt_items.push("onAttributeChange".to_string());
+    }
     // v0.4.0 — `$stream` lazy-attach: only import createStream when used.
-    if si.needs_create_stream { rt_items.push("createStream".to_string()); }
+    if si.needs_create_stream {
+        rt_items.push("createStream".to_string());
+    }
     // `$resource` (plain, non-magna) lowers to `createResource()` — import it
     // from `@aihu/runtime` (parallel to createStream). Was set but never pushed,
     // so `$resource` emitted a bare `createResource` ReferenceError.
-    if si.needs_create_resource { rt_items.push("createResource".to_string()); }
+    if si.needs_create_resource {
+        rt_items.push("createResource".to_string());
+    }
     // arch-5 M1 a11y imports — RFC-A5-017..021. Each is feature-flagged so
     // SFCs that don't use a11y primitives import nothing extra.
     if helpers.a11y_focus_trap {
@@ -1881,7 +2018,10 @@ fn build_function_imports(
         AgentReg::ServerBinding => rt_items.push("_registerAgentServerBinding".to_string()),
         AgentReg::None => {}
     }
-    lines.push(format!("import {{ {} }} from '@aihu/runtime'", rt_items.join(", ")));
+    lines.push(format!(
+        "import {{ {} }} from '@aihu/runtime'",
+        rt_items.join(", ")
+    ));
 
     // arch-5 M1: namespace import for @aihu/router when `$route`,
     // `$beforeNavigate`, `$afterNavigate`, or any of `<$router>`,
@@ -1905,9 +2045,8 @@ fn build_function_imports(
     // ONE `@aihu/context` import line — two separate imports would double-bind
     // `inject` when magna and `$context` coexist.
     if si.needs_create_magna_resource {
-        lines.push(
-            "import { createMagnaResource, MagnaFetchToken } from '@aihu/magna'".to_string(),
-        );
+        lines
+            .push("import { createMagnaResource, MagnaFetchToken } from '@aihu/magna'".to_string());
     }
     let ctx_items: &[&str] = match (si.needs_context, si.needs_create_magna_resource) {
         (true, _) => &["provide", "inject", "contextKey"],
@@ -1915,7 +2054,10 @@ fn build_function_imports(
         (false, false) => &[],
     };
     if !ctx_items.is_empty() {
-        lines.push(format!("import {{ {} }} from '@aihu/context'", ctx_items.join(", ")));
+        lines.push(format!(
+            "import {{ {} }} from '@aihu/context'",
+            ctx_items.join(", ")
+        ));
     }
 
     // arch-3 M2 / A3 G2 (RFC-001): `$auth.*` lowers to `useCurrentUser()`,
@@ -1931,22 +2073,22 @@ fn build_function_imports(
 
 pub(crate) fn decode_html_entities(s: &str) -> String {
     s.replace("&larr;", "←")
-     .replace("&rarr;", "→")
-     .replace("&uarr;", "↑")
-     .replace("&darr;", "↓")
-     .replace("&lArr;", "⇐")
-     .replace("&rArr;", "⇒")
-     .replace("&nbsp;", "\u{00A0}")
-     .replace("&amp;", "&")
-     .replace("&lt;", "<")
-     .replace("&gt;", ">")
-     .replace("&quot;", "\"")
-     .replace("&apos;", "'")
-     .replace("&mdash;", "—")
-     .replace("&ndash;", "–")
-     .replace("&hellip;", "…")
-     .replace("&copy;", "©")
-     .replace("&reg;", "®")
+        .replace("&rarr;", "→")
+        .replace("&uarr;", "↑")
+        .replace("&darr;", "↓")
+        .replace("&lArr;", "⇐")
+        .replace("&rArr;", "⇒")
+        .replace("&nbsp;", "\u{00A0}")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&hellip;", "…")
+        .replace("&copy;", "©")
+        .replace("&reg;", "®")
 }
 
 // ─── FEL-440 — agent-registration tripwire (the MUST-FAIL direction) ──────────
@@ -1979,7 +2121,10 @@ mod agent_registration_tripwire_tests {
         // registration missing from the body. Must be an error, not a no-op.
         let err = verify_agent_registration(AgentReg::ClientDispatcher, "  return x\n")
             .expect_err("absent client registration must error, never pass silently");
-        assert!(err.contains("_registerAgentDispatcher"), "error must name the missing symbol: {err}");
+        assert!(
+            err.contains("_registerAgentDispatcher"),
+            "error must name the missing symbol: {err}"
+        );
         assert!(err.contains("FEL-440"), "error must be attributable: {err}");
     }
 
@@ -1987,7 +2132,10 @@ mod agent_registration_tripwire_tests {
     fn server_registration_absent_is_a_hard_error() {
         let err = verify_agent_registration(AgentReg::ServerBinding, "  return x\n")
             .expect_err("absent server registration must error, never pass silently");
-        assert!(err.contains("_registerAgentServerBinding"), "error must name the missing symbol: {err}");
+        assert!(
+            err.contains("_registerAgentServerBinding"),
+            "error must name the missing symbol: {err}"
+        );
     }
 
     #[test]

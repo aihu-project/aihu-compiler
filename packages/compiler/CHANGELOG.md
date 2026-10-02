@@ -1,5 +1,18 @@
 # @aihu/compiler
 
+## Unreleased
+
+## 1.3.13
+
+### Patch Changes
+
+- A keyless `<each>` no longer crashes the built app at runtime
+  (`TypeError: e is not a function`). The compiler emits a default index key
+  callback and reports a warning with the file, line and column recommending
+  an explicit stable `key` when items can reorder. Use with `@aihu/arbor`
+  including aihu-project/aihu-dom#19, which passes the index to key functions;
+  upgrade both together. Fixes aihu-project/aihu#875.
+
 ## 1.3.12
 
 ### Patch Changes

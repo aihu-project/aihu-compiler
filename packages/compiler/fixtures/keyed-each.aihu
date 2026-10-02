@@ -1,0 +1,3 @@
+@template {
+  <ul each={item of items} key={item.id}><li>{item.name}</li></ul>
+}

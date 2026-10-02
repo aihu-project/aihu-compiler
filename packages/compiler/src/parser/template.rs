@@ -147,14 +147,30 @@ fn to_raw_text(node: TemplateNode) -> TemplateNode {
 }
 
 pub fn parse_template(input: &str) -> Result<Vec<TemplateNode>, CompileError> {
-    let mut parser = Parser { input, pos: 0 };
+    parse_template_with_diagnostics(input)
+        .map(|(nodes, _)| nodes)
+        .map_err(|err| *err)
+}
+
+/// Parse a template and return non-fatal diagnostics discovered at the
+/// original tag offsets. Locations are relative to the template body.
+pub(crate) fn parse_template_with_diagnostics(
+    input: &str,
+) -> Result<(Vec<TemplateNode>, Vec<CompileError>), Box<CompileError>> {
+    let mut parser = Parser {
+        input,
+        pos: 0,
+        warnings: Vec::new(),
+    };
     let nodes = parser.parse_nodes(None)?;
-    assemble_control_chains(nodes)
+    let nodes = assemble_control_chains(nodes)?;
+    Ok((nodes, parser.warnings))
 }
 
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
+    warnings: Vec<CompileError>,
 }
 
 impl<'a> Parser<'a> {
@@ -466,6 +482,23 @@ impl<'a> Parser<'a> {
         let is_html_element = !is_framework && !crate::tags::is_component_tag(&tag);
 
         let attrs = self.parse_attrs(is_html_element)?;
+
+        let has_each = attrs
+            .iter()
+            .any(|a| matches!(a, Attr::Macro { name, .. } if name == "each"));
+        let has_key = attrs
+            .iter()
+            .any(|a| matches!(a, Attr::Macro { name, .. } if name == "key"));
+        if has_each && !has_key {
+            self.warnings.push(CompileError {
+                message: "each without key: using the index as the key; add key={...} for stable identity when items reorder"
+                    .to_string(),
+                line: self.line_at(elem_start),
+                col: self.col_at(elem_start),
+                code: Some("W601".to_string()),
+                ..Default::default()
+            });
+        }
 
         // C401: reject inline JSX in attribute curly values
         if let Some(err) = check_c401(&attrs) {
@@ -1602,5 +1635,20 @@ mod tests {
     fn unterminated_string_surfaces_as_unclosed_expression_here() {
         let err = parse_template("<p>{'oops}</p>").unwrap_err();
         assert_eq!(err.message, "unclosed `{` in template expression");
+    }
+
+    #[test]
+    fn keyless_each_warning_has_tag_location_but_keyed_each_is_silent() {
+        let source =
+            "\n  <ul each={item of items}></ul>\n  <ul each={item of items} key={item.id}></ul>";
+        let (_, warnings) = parse_template_with_diagnostics(source).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code.as_deref(), Some("W601"));
+        assert_eq!(warnings[0].line, 2);
+        assert_eq!(warnings[0].col, 2);
+        assert_eq!(
+            warnings[0].message,
+            "each without key: using the index as the key; add key={...} for stable identity when items reorder"
+        );
     }
 }

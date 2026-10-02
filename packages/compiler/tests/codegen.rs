@@ -222,11 +222,17 @@ fn style_scoped_wraps_configured_css_layer_name() {
     );
     let parsed = sfc::parse(src).unwrap();
     let unit = compile_full(&parsed).unwrap();
-    let output = aihu_compiler::emit_with_options(&unit, "x-styled-custom-layer", false, Some("my-app-components"));
+    let output = aihu_compiler::emit_with_css_layer(
+        &unit,
+        "x-styled-custom-layer",
+        false,
+        Some("my-app.components"),
+    )
+    .unwrap();
     assert!(
         output
             .js
-            .contains("@layer my-app-components {\nspan { color: red; }\n}"),
+            .contains("@layer my-app.components {\nspan { color: red; }\n}"),
         "a configured css_layer_name must replace the default in the @layer wrapper; got:\n{}",
         output.js
     );
@@ -235,6 +241,28 @@ fn style_scoped_wraps_configured_css_layer_name() {
         "the default layer name must not leak when a custom name is configured; got:\n{}",
         output.js
     );
+}
+
+#[test]
+fn css_layer_name_rejects_malformed_identifiers() {
+    for name in ["x{}*{color:red}", "a;b", "bad\nname", "", ".foo", "foo."] {
+        let err = aihu_compiler::validate_css_layer_name(name)
+            .expect_err("malformed CSS layer names must be rejected before emission");
+        assert!(err.contains("invalid CSS layer name"), "{err}");
+    }
+    assert!(aihu_compiler::validate_css_layer_name("my-app.components").is_ok());
+}
+
+#[test]
+fn emit_with_options_keeps_legacy_three_argument_call() {
+    let src = concat!(
+        "@template { <span>hi</span> }\n",
+        "@style {\nspan { color: red; }\n}"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = aihu_compiler::emit_with_options(&unit, "x-legacy-options", false);
+    assert!(output.js.contains("@layer aihu-component {"));
 }
 
 /// Global `@style` blocks (`$global`) target `document`/`:root`, not a shadow
@@ -488,7 +516,10 @@ const fee = computed(() => 5)
     );
     // The multiline user import must be lifted intact to module scope.
     // The lifted block lives BEFORE the defineElement call.
-    let define_idx = result.js.find("defineElement(").expect("defineElement emitted");
+    let define_idx = result
+        .js
+        .find("defineElement(")
+        .expect("defineElement emitted");
     let module_scope = &result.js[..define_idx];
     assert!(
         module_scope.contains("import {")
@@ -1244,7 +1275,9 @@ fn repro_translation_waves_preserves_trailing_space() {
     let unit = compile_full(&parsed).unwrap();
     let output = emit(&unit, "x-ws-repro");
     assert!(
-        output.js.contains("leaf('Active and historical translation waves drained from ')"),
+        output
+            .js
+            .contains("leaf('Active and historical translation waves drained from ')"),
         "trailing space before <code> lost on repro; got:\n{}",
         output.js
     );
@@ -1281,7 +1314,10 @@ fn non_ascii_string_literals_in_expressions_are_not_latin1_mangled() {
     }
     // And none of the classic latin-1 mojibake leaders appear.
     for bad in ["Î»", "Ï", "â¾", "â¸", "×©"] {
-        assert!(!js.contains(bad), "latin-1 mojibake `{bad}` leaked into:\n{js}");
+        assert!(
+            !js.contains(bad),
+            "latin-1 mojibake `{bad}` leaked into:\n{js}"
+        );
     }
 }
 
