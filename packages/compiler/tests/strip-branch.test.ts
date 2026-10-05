@@ -440,3 +440,45 @@ describe('oxc vs esbuild — the approved semantics change, measured', () => {
     },
   )
 })
+
+// ── Large inline literal data in @state — no TypeScript-strip stall (#56) ───
+
+/**
+ * aihu-project/aihu-compiler#56: a `@state` block holding ~1 KB of string
+ * literals reportedly made the TypeScript-strip step hang and fail with
+ * `Operation timed out: 15000ms` on every build. Not reproducible against this
+ * repo's `_stripTypes` (oxc is preferred wherever available — see the "branch
+ * selection" suite above — and both oxc and a real `esbuild` transform the
+ * generated code for this fixture in well under a second), but the acceptance
+ * criteria call for pinning the non-stall as regression coverage regardless of
+ * root cause. vitest's default 5s test timeout, well under the reported 15s
+ * stall, is itself the regression guard: a reintroduced stall fails this test
+ * loudly instead of hanging silently in a consumer's build.
+ */
+function bigLiteralStateSfc(): string {
+  const bigString = 'abcdefghij'.repeat(103) // ~1030 chars, one literal
+  const lookupEntries = Array.from(
+    { length: 28 },
+    (_, i) => `k${i}: ${JSON.stringify(`value-${i}-${'x'.repeat(20)}`)}`,
+  ).join(', ') // ~1 KB spread across many small literals
+  return `@state {
+  let data = state(${JSON.stringify(bigString)})
+  const lookup = { ${lookupEntries} }
+}
+
+@template {
+  <div>{data}{lookup.k0}</div>
+}
+`
+}
+
+describe.skipIf(!HAVE_COMPILER)(
+  '@state with ~1 KB+ of inline string-literal data compiles without stalling',
+  () => {
+    it('compiles a single ~1 KB string literal within the default test timeout', async () => {
+      const code = await emit(bigLiteralStateSfc(), '/pin/big-literal.aihu')
+      expect(code).toContain('abcdefghij'.repeat(103))
+      expect(code).toContain('value-0-')
+    })
+  },
+)
