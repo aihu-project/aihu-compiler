@@ -708,6 +708,36 @@ pub fn extract_policy_warnings(source: &AihuSource) -> Vec<CompileError> {
     warnings
 }
 
+/// Issue #61 (L4, v0.6.0 roadmap) — the build-time a11y lint pass's
+/// lint-only entry point: parse `source`'s `@template` block and return
+/// ONLY its C700/C701/C702 a11y findings (missing accessible name on an
+/// image-like element, an unlabeled interactive element, an invalid or
+/// redundant ARIA `role`).
+///
+/// Deliberately cheaper than [`compile_full_with_options`]: template
+/// parsing is the only work done here — no `@state`/`@style` validation, no
+/// codegen — so a caller that only wants the a11y surface (e.g. core's
+/// planned `aihu a11y <glob>` CLI command, a thin wrapper around this) pays
+/// just that cost instead of a full compile. Returns `Err` only on a
+/// template PARSE failure (unrelated to a11y); a source with no `@template`
+/// block has no a11y surface and returns an empty `Ok(vec![])`.
+pub fn lint_a11y(source: &AihuSource) -> Result<Vec<CompileError>, CompileError> {
+    let Some(tmpl) = source.template else {
+        return Ok(Vec::new());
+    };
+    let (_, mut warnings) =
+        parser::template::parse_template_with_diagnostics(tmpl).map_err(|err| *err)?;
+    // Mirrors the line/col anchoring `compile_full_with_options` applies to
+    // the same warning list — offsets from `parse_template_with_diagnostics`
+    // are relative to the template body, not the `.aihu` file.
+    for warning in &mut warnings {
+        warning.line += source.template_line.saturating_sub(1);
+        warning.col += source.template_column;
+    }
+    warnings.retain(|w| w.code.as_deref().is_some_and(|c| c.starts_with("C70")));
+    Ok(warnings)
+}
+
 // DA4 (#437) — `route_shadow_flip_warning` (W472) lived here through the
 // phase-1 warning release and was retired when the flip landed: pages now
 // GET the light-DOM default (emit.rs prepends `// @aihu:shadow-default light`

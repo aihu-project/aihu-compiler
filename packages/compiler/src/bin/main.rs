@@ -48,6 +48,203 @@ fn emit_machine_error(e: &aihu_compiler::CompileError) {
     let _ = writeln!(std::io::stderr(), "{}", json);
 }
 
+/// `--lint-a11y`'s `--machine-errors` JSON shape: [`emit_machine_error`]'s
+/// `{code, message, from, to, range}` plus a `"file"` key (this path scans
+/// many files in one invocation, unlike the single-file compile flow that
+/// shape was designed for) and `hint`/`fix`, which the LSP wants to surface
+/// alongside an a11y finding's code/message.
+fn emit_lint_finding_machine(file: &str, e: &aihu_compiler::CompileError) {
+    use std::io::Write;
+
+    let range_json = if e.line > 0 {
+        format!(
+            r#"{{"line":{},"col":{},"end_line":{},"end_col":{}}}"#,
+            e.line, e.col, e.line, e.col
+        )
+    } else {
+        "null".to_string()
+    };
+
+    let escape = |s: &str| -> String {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    };
+
+    let code = e.code.as_deref().unwrap_or("");
+    let message = escape(&e.message);
+    let opt_str = |v: &Option<String>| match v {
+        Some(s) => format!("\"{}\"", escape(s)),
+        None => "null".to_string(),
+    };
+
+    let json = format!(
+        r#"{{"file":"{}","code":"{}","message":"{}","hint":{},"fix":{},"range":{}}}"#,
+        escape(file),
+        escape(code),
+        message,
+        opt_str(&e.hint),
+        opt_str(&e.fix),
+        range_json
+    );
+
+    let _ = writeln!(std::io::stderr(), "{}", json);
+}
+
+/// One `--lint-a11y` finding (a C700/C701/C702 a11y warning, or — rarely — a
+/// template parse failure in one of the scanned files): either the JSON
+/// shape above, or a human-readable `file:line:col: warning: CODE: message`
+/// line with the shared hint/fix tail, matching how an ordinary compile
+/// warning renders (`diagnostics::write_warning_at`).
+fn report_lint_finding(file: &str, e: &aihu_compiler::CompileError, machine_errors: bool) {
+    if machine_errors {
+        emit_lint_finding_machine(file, e);
+    } else {
+        aihu_compiler::diagnostics::write_warning_at(&mut std::io::stderr(), e, Some(file));
+    }
+}
+
+/// Does `name` match a single `*`-wildcard path SEGMENT of `pattern`? (No
+/// `/` is ever present in either side — segment boundaries are split by the
+/// caller.)
+fn glob_segment_matches(pattern: &str, name: &str) -> bool {
+    fn rec(p: &[u8], n: &[u8]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => rec(&p[1..], n) || (!n.is_empty() && rec(p, &n[1..])),
+            (Some(pc), Some(nc)) if pc == nc => rec(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    rec(pattern.as_bytes(), name.as_bytes())
+}
+
+/// Walk `dir` matching the remaining pattern `segments`, collecting every
+/// file (never directory) that matches the full pattern into `out`. `**`
+/// matches zero or more intervening directory levels (tried both ways:
+/// zero-levels falls through to the rest of the pattern against `dir`
+/// itself; one-or-more descends into every subdirectory and retries `**`
+/// there too, so `a/**/b` also matches `a/b`).
+fn glob_walk(dir: &std::path::Path, segments: &[&str], out: &mut Vec<std::path::PathBuf>) {
+    let Some((seg, rest)) = segments.split_first() else {
+        return;
+    };
+    if *seg == "**" {
+        glob_walk(dir, rest, out);
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    glob_walk(&entry.path(), segments, out);
+                }
+            }
+        }
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !glob_segment_matches(seg, &name) {
+            continue;
+        }
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        if rest.is_empty() {
+            if !is_dir {
+                out.push(entry.path());
+            }
+        } else if is_dir {
+            glob_walk(&entry.path(), rest, out);
+        }
+    }
+}
+
+/// Resolve one `--lint-a11y` argument to the `.aihu` file(s) it names.
+/// Supports `*` (any run of characters within one path segment) and `**`
+/// (zero or more intervening directory levels) — enough for the roadmap's
+/// own example invocation, `packages/examples/**/*.aihu`, without adding a
+/// glob crate dependency for a lint-only path. A pattern with no `*` is a
+/// literal path, returned as-is without touching the filesystem (so a
+/// missing file is reported as a normal read error, not silently dropped).
+fn resolve_lint_pattern(pattern: &str) -> Vec<std::path::PathBuf> {
+    if !pattern.contains('*') {
+        return vec![std::path::PathBuf::from(pattern)];
+    }
+    let (root, rel) = match pattern.strip_prefix('/') {
+        Some(rest) => (std::path::PathBuf::from("/"), rest),
+        None => (std::path::PathBuf::from("."), pattern),
+    };
+    let segments: Vec<&str> = rel.split('/').collect();
+    let mut out = Vec::new();
+    glob_walk(&root, &segments, &mut out);
+    out
+}
+
+/// `--lint-a11y <file-or-glob> [more ...]` — the lint-only entry point
+/// (issue #61): scans the named `.aihu` files for C700/C701/C702 a11y
+/// findings via [`aihu_compiler::lint_a11y`] WITHOUT running the rest of the
+/// compile pipeline (no `@state`/`@style` validation, no codegen), and
+/// exits non-zero iff any file had at least one finding — the shape
+/// `bun run lint:a11y` (and eventually core's thin `aihu a11y <glob>`
+/// wrapper) needs to fail CI on a real violation.
+fn run_lint_a11y(patterns: &[String], machine_errors: bool) -> ! {
+    if patterns.is_empty() {
+        eprintln!("usage: aihu-compile --lint-a11y <file-or-glob> [more ...] [--machine-errors]");
+        process::exit(1);
+    }
+
+    let mut files: Vec<std::path::PathBuf> =
+        patterns.iter().flat_map(|p| resolve_lint_pattern(p)).collect();
+    files.sort();
+    files.dedup();
+
+    // A pattern that matched nothing is a misconfiguration (a typo'd glob, a
+    // moved directory), not a clean lint run — exit non-zero so CI fails
+    // loud instead of silently "passing" on a scan that covered zero files.
+    if files.is_empty() {
+        eprintln!("--lint-a11y: no files matched");
+        process::exit(1);
+    }
+
+    let mut violation_count = 0usize;
+    for path in &files {
+        let path_label = path.to_string_lossy().to_string();
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                violation_count += 1;
+                eprintln!("{}: {}", path_label, e);
+                continue;
+            }
+        };
+        let parsed = match aihu_compiler::sfc::parse_with_path(&src, Some(&path_label)) {
+            Ok(p) => p,
+            Err(e) => {
+                violation_count += 1;
+                report_lint_finding(&path_label, &e, machine_errors);
+                continue;
+            }
+        };
+        let findings = match aihu_compiler::lint_a11y(&parsed) {
+            Ok(f) => f,
+            Err(e) => {
+                violation_count += 1;
+                report_lint_finding(&path_label, &e, machine_errors);
+                continue;
+            }
+        };
+        for finding in &findings {
+            violation_count += 1;
+            report_lint_finding(&path_label, finding, machine_errors);
+        }
+    }
+
+    process::exit(if violation_count > 0 { 1 } else { 0 });
+}
+
 /// Render a `CompileError` as a rich, human-readable diagnostic to stderr.
 ///
 /// r2 dx-tooling — the binary previously emitted a single
@@ -179,6 +376,20 @@ fn main() {
     // --machine-errors flag OR AIHU_MACHINE_ERRORS=1 env var: emit JSON diagnostics to stderr.
     let machine_errors = args.contains(&"--machine-errors".to_string())
         || std::env::var("AIHU_MACHINE_ERRORS").as_deref() == Ok("1");
+
+    // Issue #61 — `--lint-a11y <file-or-glob> [more ...]`: a distinct mode
+    // from the rest of `main`, which compiles exactly one file named by
+    // `argv[1]`. Checked first and exits, same as the other alternate
+    // entry points below (`--envelope`/`--ast-json`/`--route-json`), so it
+    // never falls through into that single-file path.
+    if let Some(i) = args.iter().position(|a| a == "--lint-a11y") {
+        let patterns: Vec<String> = args[i + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .cloned()
+            .collect();
+        run_lint_a11y(&patterns, machine_errors);
+    }
 
     let stdin_mode = args.contains(&"--stdin".to_string());
 

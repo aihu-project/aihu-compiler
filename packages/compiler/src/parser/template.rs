@@ -83,6 +83,267 @@ fn check_c401(attrs: &[Attr]) -> Option<CompileError> {
     None
 }
 
+// ─── C700 / C701 / C702 — build-time a11y lint (issue #61) ───────────────────
+//
+// Three static checks over plain HTML elements (never framework elements or
+// user components — those have no native DOM a11y semantics to validate):
+// a missing accessible name on an image-like element (C700), an unlabeled
+// interactive element (C701), and an invalid or redundant ARIA `role` value
+// (C702). All three are non-fatal — pushed onto `Parser::warnings` exactly
+// like W601/W602 above, not raised as a hard `CompileError` — so a build
+// still succeeds while `--machine-errors`/the LSP surface them. A dedicated
+// lint-only entry point (`aihu_compiler::lint_a11y`, `lib.rs`) filters the
+// warning list down to just these three codes so a caller can run the rules
+// without paying for a full compile.
+//
+// Dynamically-bound attributes (`alt={expr}`, curly `role={expr}`, …) are
+// treated as "present"/unchecked rather than flagged: the compiler cannot
+// evaluate the expression at build time, and assuming the author left the
+// binding empty would produce false positives on perfectly accessible code.
+
+/// WAI-ARIA 1.2 non-abstract roles. Abstract roles (`roletype`, `widget`,
+/// `structure`, `window`, …) are deliberately excluded — they exist only to
+/// organize the taxonomy and are never legal as an authored `role` value.
+/// Common near-miss typos (e.g. `"image"` for `"img"`) are also deliberately
+/// NOT included, so they correctly fall through to the "not a valid role"
+/// branch of [`check_invalid_aria_role`].
+const VALID_ARIA_ROLES: &[&str] = &[
+    // Landmark
+    "banner", "complementary", "contentinfo", "form", "main", "navigation", "region", "search",
+    // Live region
+    "alert", "log", "marquee", "status", "timer",
+    // Window
+    "alertdialog", "dialog",
+    // Widget
+    "button", "checkbox", "gridcell", "link", "menuitem", "menuitemcheckbox", "menuitemradio",
+    "option", "progressbar", "radio", "scrollbar", "searchbox", "slider", "spinbutton", "switch",
+    "tab", "tabpanel", "textbox", "treeitem",
+    // Composite widget
+    "combobox", "grid", "listbox", "menu", "menubar", "radiogroup", "tablist", "tree", "treegrid",
+    // Document structure
+    "application", "article", "caption", "cell", "columnheader", "definition", "deletion",
+    "directory", "document", "feed", "figure", "generic", "group", "heading", "img", "insertion",
+    "list", "listitem", "math", "meter", "none", "note", "paragraph", "presentation", "row",
+    "rowgroup", "rowheader", "separator", "table", "term", "toolbar", "tooltip",
+    // ARIA 1.2 structural additions
+    "code", "emphasis", "mark", "strong", "subscript", "superscript", "suggestion", "comment",
+    "time",
+];
+
+/// Does `attrs` contain `name`, in either static (`name="..."`) or bound
+/// (`name={expr}`) form? Bound attributes count as "present" — their runtime
+/// value is unknowable here, and assuming absence would false-positive on
+/// valid dynamic labels.
+fn attr_is_present(attrs: &[Attr], name: &str) -> bool {
+    attrs.iter().any(|a| match a {
+        Attr::Static { name: n, .. } | Attr::Binding { name: n, .. } => n == name,
+        Attr::Macro { .. } => false,
+    })
+}
+
+/// The literal value of a STATIC attribute named `name`, if any. Bound
+/// (`{expr}`) values are intentionally excluded — callers that need a known
+/// literal (e.g. `role="button"`, `type="hidden"`) cannot reason about a
+/// runtime expression.
+fn static_attr_value<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
+    attrs.iter().find_map(|a| match a {
+        Attr::Static { name: n, value } if n == name => Some(value.as_str()),
+        _ => None,
+    })
+}
+
+fn has_accessible_name_attr(attrs: &[Attr]) -> bool {
+    attr_is_present(attrs, "aria-label") || attr_is_present(attrs, "aria-labelledby")
+}
+
+/// Does this subtree render any text an assistive technology could read as
+/// an accessible name? Static/raw text (non-whitespace) and interpolations
+/// (dynamic — assumed non-empty, since the alternative is a build-time false
+/// positive on perfectly accessible code) both count; recurses into child
+/// elements, `{#if}`/`{#each}` bodies, and `{@html}` (which can only ever
+/// render *something*, never provably nothing).
+fn has_accessible_text(nodes: &[TemplateNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        TemplateNode::Text(s) | TemplateNode::RawText(s) => !s.trim().is_empty(),
+        TemplateNode::Interpolation(_) | TemplateNode::HtmlBlock { .. } => true,
+        TemplateNode::Element { children, .. } | TemplateNode::MacroElement { children, .. } => {
+            has_accessible_text(children)
+        }
+        TemplateNode::IfBlock { branches } => {
+            branches.iter().any(|(_, body)| has_accessible_text(body))
+        }
+        TemplateNode::EachBlock { body, empty_body, .. } => {
+            has_accessible_text(body)
+                || empty_body
+                    .as_deref()
+                    .is_some_and(has_accessible_text)
+        }
+    })
+}
+
+/// Build a C70x finding. `message` does NOT repeat `code` — unlike the hard
+/// `CompileError`s elsewhere in this file, these flow through the WARNING
+/// channel (`diagnostics::write_warning_at`), which always prints
+/// `warning: <code>: <message>` itself; embedding the code in `message` too
+/// would print it twice.
+fn a11y_violation(code: &'static str, message: String, hint: String, fix: String) -> CompileError {
+    CompileError {
+        message,
+        line: 0,
+        col: 0,
+        code: Some(code.to_string()),
+        hint: Some(hint),
+        fix: Some(fix),
+        ..Default::default()
+    }
+}
+
+/// C700 — an image-like element (`<img>`) with no accessible name: no `alt`,
+/// `aria-label`, or `aria-labelledby`. `alt=""` DOES satisfy this check — an
+/// empty alt is the standard way to mark an image decorative, which is a
+/// legitimate, intentional accessible name of "none".
+fn check_missing_alt(tag: &str, attrs: &[Attr]) -> Option<CompileError> {
+    if tag != "img" {
+        return None;
+    }
+    if attr_is_present(attrs, "alt") || has_accessible_name_attr(attrs) {
+        return None;
+    }
+    Some(a11y_violation(
+        "C700",
+        format!("<{tag}> has no accessible name — missing `alt`, `aria-label`, or `aria-labelledby`"),
+        "screen readers announce an unlabeled image by its file name, or not at all; every \
+         image needs an accessible name, or an explicit empty `alt` to mark it decorative"
+            .to_string(),
+        "add `alt=\"...\"` describing the image, or `alt=\"\"` if it is purely decorative"
+            .to_string(),
+    ))
+}
+
+/// C701 — an interactive element with no accessible name: a `<button>`/`<a
+/// href>` with no text content (static, interpolated, or `{@html}`) and no
+/// `aria-label`/`aria-labelledby`; or an `<input>`/`<select>`/`<textarea>`
+/// with neither an `aria-label`/`aria-labelledby` nor (for `<input
+/// type="submit|button|reset">`) a `value` to fall back on.
+fn check_unlabeled_interactive(
+    tag: &str,
+    attrs: &[Attr],
+    children: &[TemplateNode],
+) -> Option<CompileError> {
+    let labeled = has_accessible_name_attr(attrs);
+
+    let violation = |elem: &str, fix: &str| {
+        Some(a11y_violation(
+            "C701",
+            format!("<{elem}> has no accessible name for assistive technology"),
+            "an interactive element with no visible text and no `aria-label`/`aria-labelledby` \
+             is announced as unlabeled (e.g. just \"button\") by screen readers, so people using \
+             them cannot tell what it does"
+                .to_string(),
+            fix.to_string(),
+        ))
+    };
+
+    match tag {
+        "button" => {
+            if labeled || has_accessible_text(children) {
+                None
+            } else {
+                violation(
+                    "button",
+                    "add visible text inside the <button>, or an `aria-label`/`aria-labelledby`",
+                )
+            }
+        }
+        "a" => {
+            // An `<a>` with no `href` is not an interactive element (it is
+            // not focusable/activatable), so it carries no a11y-name
+            // requirement here.
+            if !attr_is_present(attrs, "href") {
+                return None;
+            }
+            if labeled || has_accessible_text(children) {
+                None
+            } else {
+                violation(
+                    "a href",
+                    "add link text, or an `aria-label`/`aria-labelledby`",
+                )
+            }
+        }
+        "select" | "textarea" => {
+            if labeled {
+                None
+            } else {
+                violation(
+                    tag,
+                    "add an `aria-label`/`aria-labelledby` (or associate an external \
+                     `<label for>`)",
+                )
+            }
+        }
+        "input" => {
+            let input_type = static_attr_value(attrs, "type").unwrap_or("text");
+            if input_type.eq_ignore_ascii_case("hidden") {
+                return None;
+            }
+            if labeled {
+                return None;
+            }
+            if matches!(input_type.to_ascii_lowercase().as_str(), "submit" | "button" | "reset")
+                && attr_is_present(attrs, "value")
+            {
+                return None;
+            }
+            violation(
+                "input",
+                "add an `aria-label`/`aria-labelledby` (or associate an external `<label for>`)",
+            )
+        }
+        _ => None,
+    }
+}
+
+/// C702 — a `role` attribute that is either not a recognized WAI-ARIA role,
+/// or redundant (restating the element's own implicit native role, e.g.
+/// `role="button"` on an actual `<button>`). Only STATIC `role="..."` values
+/// are checked; a bound `role={expr}` is unknowable at compile time.
+fn check_invalid_aria_role(tag: &str, attrs: &[Attr]) -> Option<CompileError> {
+    let role = static_attr_value(attrs, "role")?.trim();
+    if role.is_empty() {
+        return None;
+    }
+
+    let redundant = match tag {
+        "button" => role == "button",
+        "a" if attr_is_present(attrs, "href") => role == "link",
+        _ => false,
+    };
+    if redundant {
+        return Some(a11y_violation(
+            "C702",
+            format!("role=\"{role}\" is redundant on <{tag}> — it already has that implicit role"),
+            "restating an element's own native role adds no information for assistive \
+             technology and can silently stop mattering if the role list ever changes"
+                .to_string(),
+            format!("remove `role=\"{role}\"`"),
+        ));
+    }
+
+    if !VALID_ARIA_ROLES.contains(&role) {
+        return Some(a11y_violation(
+            "C702",
+            format!("role=\"{role}\" is not a recognized WAI-ARIA role"),
+            "assistive technology ignores an unrecognized role value, so the element falls back \
+             to its native (or no) role — the author's intended semantics are silently dropped"
+                .to_string(),
+            "use a valid WAI-ARIA role, or remove the attribute".to_string(),
+        ));
+    }
+
+    None
+}
+
 /// HTML tree-construction rule for `<pre>`/`<textarea>` (GH #856): their
 /// content model preserves whitespace verbatim instead of the JSX-style
 /// collapse `normalize_text_node` applies to ordinary template text, so
@@ -527,6 +788,9 @@ impl<'a> Parser<'a> {
             if is_framework {
                 return Ok(TemplateNode::MacroElement { name: tag, attrs, children: vec![] });
             }
+            if is_html_element {
+                self.push_a11y_warnings(&tag, &attrs, &[], elem_start);
+            }
             return Ok(TemplateNode::Element { tag, attrs, children: vec![] });
         }
 
@@ -551,11 +815,39 @@ impl<'a> Parser<'a> {
             children
         };
 
+        if is_html_element {
+            self.push_a11y_warnings(&tag, &attrs, &children, elem_start);
+        }
+
         Ok(TemplateNode::Element {
             tag,
             attrs,
             children,
         })
+    }
+
+    /// Run the C700/C701/C702 a11y checks for one plain-HTML element and
+    /// push any findings onto `self.warnings`, anchored at the element's
+    /// opening `<tag` (matches how W601 above is anchored).
+    fn push_a11y_warnings(
+        &mut self,
+        tag: &str,
+        attrs: &[Attr],
+        children: &[TemplateNode],
+        elem_start: usize,
+    ) {
+        for mut err in [
+            check_missing_alt(tag, attrs),
+            check_unlabeled_interactive(tag, attrs, children),
+            check_invalid_aria_role(tag, attrs),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            err.line = self.line_at(elem_start);
+            err.col = self.col_at(elem_start);
+            self.warnings.push(err);
+        }
     }
 
     fn parse_attrs(&mut self, is_html_element: bool) -> Result<Vec<crate::types::Attr>, CompileError> {
@@ -1650,5 +1942,99 @@ mod tests {
             warnings[0].message,
             "each without key: using the index as the key; add key={...} for stable identity when items reorder"
         );
+    }
+
+    // ─── C700/C701/C702 — a11y lint (issue #61) ──────────────────────────────
+
+    fn a11y_codes(source: &str) -> Vec<String> {
+        let (_, warnings) = parse_template_with_diagnostics(source).unwrap();
+        warnings
+            .into_iter()
+            .filter_map(|w| w.code)
+            .filter(|c| c.starts_with("C70"))
+            .collect()
+    }
+
+    #[test]
+    fn c700_img_missing_alt_is_flagged() {
+        let codes = a11y_codes(r#"<img src="cat.png">"#);
+        assert_eq!(codes, vec!["C700".to_string()]);
+    }
+
+    #[test]
+    fn c700_img_with_alt_or_aria_label_is_silent() {
+        assert!(a11y_codes(r#"<img src="cat.png" alt="a cat">"#).is_empty());
+        assert!(a11y_codes(r#"<img src="cat.png" alt="">"#).is_empty());
+        assert!(a11y_codes(r#"<img src="cat.png" aria-label="a cat">"#).is_empty());
+        assert!(a11y_codes(r#"<img src={dynamicSrc} alt={dynamicAlt}>"#).is_empty());
+    }
+
+    #[test]
+    fn c701_empty_button_is_flagged() {
+        let codes = a11y_codes(r#"<button on:click={doThing}></button>"#);
+        assert_eq!(codes, vec!["C701".to_string()]);
+    }
+
+    #[test]
+    fn c701_button_with_text_or_label_is_silent() {
+        assert!(a11y_codes(r#"<button on:click={doThing}>Save</button>"#).is_empty());
+        assert!(a11y_codes(r#"<button aria-label="Save"></button>"#).is_empty());
+        assert!(a11y_codes(r#"<button>{label}</button>"#).is_empty());
+        assert!(a11y_codes(r#"<button><span>Save</span></button>"#).is_empty());
+    }
+
+    #[test]
+    fn c701_bare_anchor_without_href_is_not_interactive() {
+        assert!(a11y_codes(r#"<a name="anchor"></a>"#).is_empty());
+    }
+
+    #[test]
+    fn c701_anchor_href_without_text_is_flagged() {
+        let codes = a11y_codes(r#"<a href="/home"></a>"#);
+        assert_eq!(codes, vec!["C701".to_string()]);
+    }
+
+    #[test]
+    fn c701_input_without_label_is_flagged() {
+        let codes = a11y_codes(r#"<input type="text">"#);
+        assert_eq!(codes, vec!["C701".to_string()]);
+    }
+
+    #[test]
+    fn c701_input_variants_that_are_silent() {
+        assert!(a11y_codes(r#"<input type="hidden" value="x">"#).is_empty());
+        assert!(a11y_codes(r#"<input type="text" aria-label="Name">"#).is_empty());
+        assert!(a11y_codes(r#"<input type="submit" value="Go">"#).is_empty());
+    }
+
+    #[test]
+    fn c702_invalid_role_is_flagged() {
+        let codes = a11y_codes(r#"<div role="image"></div>"#);
+        assert_eq!(codes, vec!["C702".to_string()]);
+    }
+
+    #[test]
+    fn c702_redundant_role_on_native_element_is_flagged() {
+        let codes = a11y_codes(r#"<button role="button">Save</button>"#);
+        assert_eq!(codes, vec!["C702".to_string()]);
+    }
+
+    #[test]
+    fn c702_valid_non_redundant_role_is_silent() {
+        assert!(a11y_codes(r#"<div role="dialog"></div>"#).is_empty());
+        assert!(a11y_codes(r#"<a href="/home" role="button">Go</a>"#).is_empty());
+    }
+
+    #[test]
+    fn c702_dynamic_role_is_not_checked() {
+        assert!(a11y_codes(r#"<div role={dynamicRole}></div>"#).is_empty());
+    }
+
+    #[test]
+    fn a11y_checks_are_skipped_for_framework_elements_and_components() {
+        // `<slot>` is a framework element; `<MyButton>` is a user component.
+        // Neither has native DOM a11y semantics for these checks to apply to.
+        assert!(a11y_codes(r#"<slot name="icon"></slot>"#).is_empty());
+        assert!(a11y_codes(r#"<x-my-button role="image"></x-my-button>"#).is_empty());
     }
 }
