@@ -77,6 +77,61 @@ fn event_attr_onclick() {
 }
 
 #[test]
+fn event_attr_passive_modifier_stubs_prevent_default() {
+    // l3-event-modifier-passive: `.passive` mirrors the WHATWG-defined
+    // contract of a passive listener (`preventDefault()` is a no-op) — the
+    // same JS-level emulation style already used for `.prevent`/`.stop`/
+    // `.self`/`.once`, since this codegen path hands a plain function
+    // handler to arbor's attrs object rather than calling
+    // `addEventListener` with options directly.
+    let src = concat!(
+        "@state {
+",
+        "const handler = () => {}
+",
+        "}
+",
+        "@template { <div on:wheel.passive={handler}></div> }"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-passive");
+    assert!(
+        output.js.contains("_e.preventDefault = () => {}; "),
+        "expected a no-op preventDefault stub for `.passive`: {}",
+        output.js
+    );
+}
+
+#[test]
+fn event_attr_passive_composes_with_once() {
+    // Acceptance criterion: `.passive` composes with `.once` where the DOM
+    // API allows combining them (`{ once: true, passive: true }`).
+    let src = concat!(
+        "@state {
+",
+        "const handler = () => {}
+",
+        "}
+",
+        "@template { <div on:scroll.once.passive={handler}></div> }"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-once-passive");
+    assert!(
+        output.js.contains("_e.preventDefault = () => {}; "),
+        "expected the passive stub inside the once wrapper: {}",
+        output.js
+    );
+    assert!(
+        output.js.contains("_fired"),
+        "expected the once-boundary fired-flag closure to still be present: {}",
+        output.js
+    );
+}
+
+#[test]
 fn signal_leaf_cast() {
     let src = concat!(
         "@state {

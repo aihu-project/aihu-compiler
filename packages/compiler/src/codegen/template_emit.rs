@@ -2106,7 +2106,14 @@ fn capitalize_first(s: &str) -> String {
 
 /// §2.4 — compose `on:<event>.<mods>` dotted modifiers around the handler.
 /// `.prevent` → preventDefault; `.stop` → stopPropagation; `.self` → only when
-/// the event target IS the element; `.once` → fire at most once.
+/// the event target IS the element; `.once` → fire at most once; `.passive` →
+/// `preventDefault()` becomes a no-op, mirroring the WHATWG-defined behavior
+/// of a passive listener (events are still attached through the same plain
+/// function-handler channel as every other modifier here, not a dedicated
+/// native `addEventListener(..., { passive: true })` registration, so the
+/// author-visible contract — calls to `preventDefault()` are silently
+/// ignored — is what's reproduced, same as `.once`/`.prevent`/`.stop`/`.self`
+/// are JS-level emulations rather than native listener options).
 fn wrap_event_modifiers(handler: &str, mods: &[&str]) -> String {
     if mods.is_empty() {
         return handler.to_string();
@@ -2114,6 +2121,9 @@ fn wrap_event_modifiers(handler: &str, mods: &[&str]) -> String {
     let mut prelude = String::new();
     if mods.contains(&"self") {
         prelude.push_str("if (_e.target !== _e.currentTarget) return; ");
+    }
+    if mods.contains(&"passive") {
+        prelude.push_str("_e.preventDefault = () => {}; ");
     }
     if mods.contains(&"prevent") {
         prelude.push_str("_e.preventDefault(); ");
