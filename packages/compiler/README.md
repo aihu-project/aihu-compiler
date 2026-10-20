@@ -65,6 +65,19 @@ const route = compileRouteMeta(source, id) // `@route` metadata, or null
 All three spawn (or reuse, via an in-process memo) the same `aihu-compile`
 binary the Vite plugin uses internally.
 
+The root entry also exports `compileSidecar(source, id?, options?)`, which
+compiles an SFC to its type-check surface — the `.aihu.ts` sidecar content,
+as a line-preserving string rather than a file on disk. This is the
+in-memory path `@aihu/tsc` uses to hand `.aihu` files to TypeScript as
+virtual files, so a `tsc` diagnostic maps straight back to the source line
+the author wrote:
+
+```ts
+import { compileSidecar } from '@aihu/compiler'
+
+const surface = compileSidecar(source, id, { target: 'universal' }) // '.aihu.ts' sidecar text
+```
+
 ## Install
 
 <!-- BEGIN_AUTOGEN: install -->
