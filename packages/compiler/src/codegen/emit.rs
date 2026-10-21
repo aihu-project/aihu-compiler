@@ -733,6 +733,8 @@ struct NeededHelpers {
     outlet_element: bool,
     /// `<$navigate>` macro element used in the template.
     navigate_element: bool,
+    /// RFC-A5-001 (issue #58) — `<theme>` macro element used in the template.
+    theme_element: bool,
 }
 
 fn collect_needed_helpers(nodes: &[TemplateNode]) -> NeededHelpers {
@@ -838,6 +840,10 @@ fn collect_helpers_recursive(nodes: &[TemplateNode], h: &mut NeededHelpers) {
                         h.needs_effect = true; // outlet content reacts to route signal
                     }
                     "navigate" => h.navigate_element = true,
+                    "theme" => {
+                        h.theme_element = true;
+                        h.needs_effect = true; // custom-property write + media-query tracking are reactive
+                    }
                     _ => {}
                 }
                 // FEL-230: structural/effect directives placed ON a macro element
@@ -965,6 +971,40 @@ fn emit_boundary_helpers(h: &NeededHelpers) -> String {
     if h.navigate_element {
         // `<$navigate>` — programmatic redirect on mount.
         lines.push("const createNavigateBoundary = (to, replace) => {\n  onMount(() => { void __aihuRouter.navigate(to, { replace: !!replace }); });\n  return branch('span', { hidden: '', 'aria-hidden': 'true', 'data-aihu-navigate': to }, []);\n};");
+    }
+    if h.theme_element {
+        // RFC-A5-001 (issue #58) — `<theme mode tokens>`. `modeFn` is a thunk
+        // (always, even for a static `mode="light"` — see template_emit.rs)
+        // read reactively via `computed`; `auto` tracks `prefers-color-scheme`
+        // through a plain `matchMedia` listener (no new runtime primitive —
+        // mirrors the `.style.setProperty` + `effect()` precedent `$reactive`
+        // already uses in style_macros.rs for host custom properties, rather
+        // than depending on `@aihu/use`'s `useMediaQuery`, whose exact signal
+        // shape this SFC-internal helper — unlike a user's own script, which
+        // auto-imports it by name via use_registry.rs — can't assume).
+        //
+        // `tokensKey` resolves against `globalThis.__aihu_themes`, a runtime
+        // registry a project populates itself (e.g. from its own
+        // `aihu.config.ts`) — the same "project data the Rust compiler can't
+        // see" pattern `router` (`globalThis.__aihu_routes`) and `outlet`
+        // (`globalThis.__aihuRegisterRouteComponents`) already use above,
+        // rather than a new compile-time `aihu.config.ts` loader (no such
+        // loader exists anywhere in this repo today). Flagged explicitly in
+        // the PR for a human to correct if a compile-time loader was instead
+        // intended. `__aihu_themes[tokensKey]` is a flat `{ [cssVar]: value }`
+        // map applied as-is (no light/dark sub-keying) — the issue's own
+        // acceptance criteria describe a single flat set keyed only by
+        // `tokens`, not varying by resolved mode; flagged in the PR too, in
+        // case per-mode token values were the intended design instead.
+        //
+        // `toggle()` sets a manual override that wins over both the `mode`
+        // prop and system `prefers-color-scheme` until `mode` changes again
+        // (clearing it) — "a function to flip the resolved mode" per the
+        // issue, without fighting a `mode="auto"` author who didn't ask for
+        // a toggle. Context is only ever PROVIDED here (never injected), so
+        // `theme.resolved`/`theme.toggle()` reach descendants the same way
+        // `$context`'s own `provide`/`inject`/`contextKey` trio already does.
+        lines.push("const createThemeBoundary = (modeFn, tokensKey, b) => {\n  const override = signal(null);\n  let lastMode = modeFn();\n  const mq = (typeof window !== 'undefined' && window.matchMedia) ? window.matchMedia('(prefers-color-scheme: dark)') : null;\n  const sysDark = signal(mq ? mq.matches : false);\n  if (mq) {\n    const onChange = (e) => sysDark.write(e.matches);\n    if (mq.addEventListener) mq.addEventListener('change', onChange); else if (mq.addListener) mq.addListener(onChange);\n    onCleanup(() => { if (mq.removeEventListener) mq.removeEventListener('change', onChange); else if (mq.removeListener) mq.removeListener(onChange); });\n  }\n  const resolved = computed(() => {\n    const m = modeFn();\n    if (m !== lastMode) { lastMode = m; override.write(null); }\n    const ov = override.read();\n    if (ov) return ov;\n    if (m === 'light' || m === 'dark') return m;\n    return sysDark.read() ? 'dark' : 'light';\n  });\n  const toggle = () => { override.write(resolved.read() === 'dark' ? 'light' : 'dark'); };\n  provide(contextKey('theme'), { resolved: resolved.read, toggle });\n  const host = branch('div', { 'data-aihu-theme': '' }, typeof b === 'function' ? [b()] : []);\n  onMount(() => {\n    const el = host && host.el;\n    if (!el) return () => {};\n    const stop = effect(() => {\n      const props = (globalThis.__aihu_themes && globalThis.__aihu_themes[tokensKey]) || {};\n      for (const k in props) el.style.setProperty(k.indexOf('--') === 0 ? k : ('--' + k), String(props[k]));\n    });\n    return () => { stop && stop(); };\n  });\n  return host;\n};");
     }
     if h.needs_class_helper {
         // B3 — `class={[a, b && 'c']}` array-form helper. Joins truthy strings
@@ -1934,7 +1974,7 @@ fn build_function_imports(
     let script_uses_effect = script.contains("effect(");
     // arch-5 M1: routing helpers (`<$link>`, `<$outlet>`, `<$navigate>`)
     // emit `effect()` calls inside their boundaries, so ensure `effect` is imported.
-    let helper_effect = helpers.link_element || helpers.outlet_element;
+    let helper_effect = helpers.link_element || helpers.outlet_element || helpers.theme_element;
     let emit_effect =
         needs_effect || script_uses_effect || si.needs_effect_for_macros || helper_effect;
 
@@ -1959,7 +1999,7 @@ fn build_function_imports(
     if !signal_map.0.is_empty() {
         lines.push("import type { Signal } from '@aihu/signals'".to_string());
         let mut sig_items: Vec<&str> = vec!["signal"];
-        if si.needs_computed {
+        if si.needs_computed || helpers.theme_element {
             sig_items.push("computed");
         }
         if emit_effect {
@@ -1973,9 +2013,15 @@ fn build_function_imports(
             sig_items.join(", ")
         ));
     } else {
-        // No signals in map, but may still need computed/effect/batch
+        // No signals in map, but may still need signal/computed/effect/batch
         let mut sig_items: Vec<&str> = Vec::new();
-        if si.needs_computed {
+        // RFC-A5-001 (issue #58) — `createThemeBoundary` calls raw `signal()`
+        // (the override + system-dark-mode trackers) regardless of whether
+        // the component's own `@state` declares any signals.
+        if helpers.theme_element {
+            sig_items.push("signal");
+        }
+        if si.needs_computed || helpers.theme_element {
             sig_items.push("computed");
         }
         if emit_effect {
@@ -2000,8 +2046,10 @@ fn build_function_imports(
     let needs_on_mount_for_router = helpers.router_element
         || helpers.link_element
         || helpers.outlet_element
-        || helpers.navigate_element;
-    let needs_on_cleanup_for_router = helpers.router_element || helpers.outlet_element;
+        || helpers.navigate_element
+        || helpers.theme_element;
+    let needs_on_cleanup_for_router =
+        helpers.router_element || helpers.outlet_element || helpers.theme_element;
     if si.needs_on_mount || needs_on_mount_for_router || helpers.needs_on_mount_for_directives {
         rt_items.push("onMount".to_string());
     }
@@ -2076,10 +2124,24 @@ fn build_function_imports(
         lines
             .push("import { createMagnaResource, MagnaFetchToken } from '@aihu/magna'".to_string());
     }
-    let ctx_items: &[&str] = match (si.needs_context, si.needs_create_magna_resource) {
-        (true, _) => &["provide", "inject", "contextKey"],
-        (false, true) => &["inject"],
-        (false, false) => &[],
+    // RFC-A5-001 (issue #58) — `createThemeBoundary` always PROVIDES
+    // `theme.resolved`/`theme.toggle()` via `provide(contextKey(...), ...)`
+    // (the same primitives `$context`'s own provide/consume lowering uses,
+    // per B5/O2 above) but never injects/consumes — so it needs
+    // `provide`/`contextKey` but not `inject`, independent of whether the
+    // component's own `@state` separately uses `$context`/magna.
+    let ctx_items: Vec<&str> = if si.needs_context {
+        vec!["provide", "inject", "contextKey"]
+    } else if si.needs_create_magna_resource {
+        if helpers.theme_element {
+            vec!["provide", "inject", "contextKey"]
+        } else {
+            vec!["inject"]
+        }
+    } else if helpers.theme_element {
+        vec!["provide", "contextKey"]
+    } else {
+        vec![]
     };
     if !ctx_items.is_empty() {
         lines.push(format!(

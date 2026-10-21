@@ -14,6 +14,10 @@ pub(crate) const FRAMEWORK_ELEMENTS: &[&str] = &[
     // [R→] rule-carried boundary + a11y vocabulary (v1 `<$guard>`, `<$warp>`,
     // `<$focusTrap>`, `<$liveRegion>`, `<$visuallyHidden>`, `<$skipLink>`).
     "guard", "warp", "focusTrap", "liveRegion", "visuallyHidden", "skipLink",
+    // arch-5 RFC-A5-001 — `<theme>` scoped theme provider (issue #58). Grammar
+    // v2 is prefix-less (see `macro_element_retired` below); the issue's own
+    // `<$theme>` examples use the retired v1 spelling.
+    "theme",
 ];
 
 // ─── C400 / C401 compile-error codes ─────────────────────────────────────────
