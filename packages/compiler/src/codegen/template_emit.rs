@@ -1139,6 +1139,49 @@ fn emit_macro_element(
             format!("createNavigateBoundary({}, {})", to_expr, replace_expr)
         }
 
+        // ── arch-5 RFC-A5-001 — scoped theme provider (issue #58) ────────────
+        "theme" => {
+            // `<theme mode tokens>` — `mode` must stay REACTIVE (an explicit
+            // mode prop overrides `prefers-color-scheme` tracking without a
+            // remount when it changes), so it is always wrapped as a thunk —
+            // unlike `router`/`navigate`'s `find_static_or_binding_attr`
+            // attrs, which are read once at setup. A static value that is
+            // not one of the three known enum literals is treated as a bare
+            // expression reference (mirrors `focusTrap`'s `active` handling
+            // above), so the issue's own `mode="mode"` example — which reads
+            // as a prop reference, not the four-letter string "mode" — still
+            // does something reasonable instead of silently misbehaving.
+            let mode_expr = match attrs.iter().find_map(|a| match a {
+                crate::types::Attr::Binding { name, expr } if name == "mode" => {
+                    Some(format!("() => ({})", expr))
+                }
+                crate::types::Attr::Static { name, value } if name == "mode" => {
+                    if value == "light" || value == "dark" || value == "auto" {
+                        Some(format!("() => ('{}')", value))
+                    } else {
+                        Some(format!("() => ({})", value))
+                    }
+                }
+                _ => None,
+            }) {
+                Some(e) => e,
+                None => "() => ('auto')".to_string(),
+            };
+            // `tokens` is a plain string key (into the `__aihu_themes` runtime
+            // registry — see `createThemeBoundary`'s doc comment in emit.rs
+            // for why this is a runtime registry rather than an
+            // `aihu.config.ts` compile-time lookup); not required to be
+            // reactive, so it uses the same one-shot convention as
+            // `router`/`navigate`'s attrs.
+            let tokens_expr = find_static_or_binding_attr(attrs, "tokens")
+                .unwrap_or_else(|| "null".to_string());
+            let children_subtree = emit_nodes(children, signal_map, state_names, &next_indent, mode, RefHoist::none());
+            format!(
+                "createThemeBoundary({}, {}, () => {{ return {} }})",
+                mode_expr, tokens_expr, children_subtree
+            )
+        }
+
         // ── Unknown macro element ─────────────────────────────────────────────
         _ => {
             let children_subtree = emit_nodes(children, signal_map, state_names, &next_indent, mode, RefHoist::none());
