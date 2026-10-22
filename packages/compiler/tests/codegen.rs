@@ -77,13 +77,16 @@ fn event_attr_onclick() {
 }
 
 #[test]
-fn event_attr_passive_modifier_stubs_prevent_default() {
-    // l3-event-modifier-passive: `.passive` mirrors the WHATWG-defined
-    // contract of a passive listener (`preventDefault()` is a no-op) — the
-    // same JS-level emulation style already used for `.prevent`/`.stop`/
-    // `.self`/`.once`, since this codegen path hands a plain function
-    // handler to arbor's attrs object rather than calling
-    // `addEventListener` with options directly.
+fn event_attr_passive_modifier_uses_real_add_event_listener() {
+    // l3-event-modifier-passive: `.passive` must be a REAL
+    // `addEventListener(event, handler, { passive: true })` registration —
+    // not a JS-level `preventDefault` stub — since the whole point of a
+    // passive listener is telling the browser up front (before the handler
+    // ever runs) that scroll/touch handling can proceed without waiting.
+    // arbor's plain attrs-object function-handler shortcut has no way to
+    // carry listener options through it, so `.passive` bypasses that path
+    // and attaches directly to the element inside `onMount`, mirroring the
+    // `$show`/`$html`/`$ref` node-capture pattern.
     let src = concat!(
         "@state {
 ",
@@ -97,16 +100,22 @@ fn event_attr_passive_modifier_stubs_prevent_default() {
     let unit = compile_full(&parsed).unwrap();
     let output = emit(&unit, "x-passive");
     assert!(
-        output.js.contains("_e.preventDefault = () => {}; "),
-        "expected a no-op preventDefault stub for `.passive`: {}",
+        output.js.contains("addEventListener('wheel', _h, { passive: true })"),
+        "expected a real addEventListener(..., {{ passive: true }}) registration: {}",
+        output.js
+    );
+    assert!(
+        !output.js.contains("onWheel"),
+        "`.passive` must not also go through arbor's plain onWheel attr path: {}",
         output.js
     );
 }
 
 #[test]
-fn event_attr_passive_composes_with_once() {
-    // Acceptance criterion: `.passive` composes with `.once` where the DOM
-    // API allows combining them (`{ once: true, passive: true }`).
+fn event_attr_passive_composes_with_once_as_native_options() {
+    // Acceptance criterion: `.passive` composes with `.once` as
+    // `{ once: true, passive: true }` — a single native registration, not
+    // the closure-based `_fired` guard `.once` uses on its own.
     let src = concat!(
         "@state {
 ",
@@ -120,13 +129,45 @@ fn event_attr_passive_composes_with_once() {
     let unit = compile_full(&parsed).unwrap();
     let output = emit(&unit, "x-once-passive");
     assert!(
-        output.js.contains("_e.preventDefault = () => {}; "),
-        "expected the passive stub inside the once wrapper: {}",
+        output
+            .js
+            .contains("addEventListener('scroll', _h, { passive: true, once: true })"),
+        "expected `.once` promoted to the native `once: true` option alongside `passive: true`: {}",
         output.js
     );
     assert!(
-        output.js.contains("_fired"),
-        "expected the once-boundary fired-flag closure to still be present: {}",
+        !output.js.contains("_fired"),
+        "the native `once: true` option replaces the closure-based fired-flag guard: {}",
+        output.js
+    );
+}
+
+#[test]
+fn event_attr_passive_composes_with_stop_in_handler_body() {
+    // `.stop` still applies as handler-body behavior (stopPropagation)
+    // alongside the native `.passive` registration.
+    let src = concat!(
+        "@state {
+",
+        "const handler = () => {}
+",
+        "}
+",
+        "@template { <div on:touchstart.stop.passive={handler}></div> }"
+    );
+    let parsed = sfc::parse(src).unwrap();
+    let unit = compile_full(&parsed).unwrap();
+    let output = emit(&unit, "x-stop-passive");
+    assert!(
+        output.js.contains("_e.stopPropagation(); "),
+        "expected `.stop` to still wrap the handler body: {}",
+        output.js
+    );
+    assert!(
+        output
+            .js
+            .contains("addEventListener('touchstart', _h, { passive: true })"),
+        "expected a real addEventListener(..., {{ passive: true }}) registration: {}",
         output.js
     );
 }
