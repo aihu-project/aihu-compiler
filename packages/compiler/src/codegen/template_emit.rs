@@ -1511,6 +1511,14 @@ fn emit_attrs_for_element(
                         Some((e, m)) => (e, m.split('.').collect()),
                         None => (event_full, Vec::new()),
                     };
+                    // `.passive` needs a real `addEventListener` registration
+                    // (see `wrap_event_modifiers`'s doc comment) — it's wired
+                    // up as an `ElemEffect::PassiveEvent` in
+                    // `emit_macro_effects_scoped` instead, not as a plain
+                    // function-valued attr here.
+                    if mods.contains(&"passive") {
+                        return None;
+                    }
                     let handler = macro_value_expr(value);
                     // FEL-172: same handler-body rewrite as the Binding path.
                     let t = handler.trim();
@@ -2107,6 +2115,15 @@ fn capitalize_first(s: &str) -> String {
 /// §2.4 — compose `on:<event>.<mods>` dotted modifiers around the handler.
 /// `.prevent` → preventDefault; `.stop` → stopPropagation; `.self` → only when
 /// the event target IS the element; `.once` → fire at most once.
+///
+/// `.passive` is NOT composed here — it needs a real `addEventListener(...,
+/// { passive: true })` registration (a JS-level `preventDefault` stub would
+/// not give authors the actual point of `.passive`: telling the browser up
+/// front that scroll/touch handling can proceed without waiting on the
+/// handler). Elements carrying `.passive` skip this plain function-attr path
+/// entirely and are wired directly via `ElemEffect::PassiveEvent` in
+/// `emit_macro_effects_scoped`, alongside `.once` promoted to the native
+/// `{ once: true }` option when the two are combined.
 fn wrap_event_modifiers(handler: &str, mods: &[&str]) -> String {
     if mods.is_empty() {
         return handler.to_string();
@@ -2527,6 +2544,13 @@ enum ElemEffect {
     Html(String),
     Class(String, String),
     Ref(String),
+    /// l3-event-modifier-passive: `event name`, `wrapped handler`, `options
+    /// object literal` (e.g. `{ passive: true }` or `{ passive: true, once:
+    /// true }`) for a REAL `addEventListener` registration — see the
+    /// `on:` arm of `emit_macro_effects_scoped` for why `.passive` can't go
+    /// through the plain attrs-object function-handler path every other
+    /// event modifier uses.
+    PassiveEvent(String, String, String),
     /// FEL-441: an owner-scope `$ref` whose `onMount` was hoisted ahead of the
     /// `@state` callbacks. The IIFE only assigns the node descriptor to the
     /// named setup-scoped holder (`__aihu_ref_N`); the registration lives in the
@@ -2572,6 +2596,10 @@ impl ElemEffect {
             ElemEffect::Ref(setter_call) => format!(
                 "{}(() => {{ const _n = {}; try {{ onMount(() => {{ const _el = _n && _n.el; if (_el) {{ {} }}; return () => {{}}; }}); }} catch {{}} return _n; }})()",
                 indent, inner, setter_call
+            ),
+            ElemEffect::PassiveEvent(event, handler, opts) => format!(
+                "{}(() => {{ const _n = {}; try {{ onMount(() => {{ const _el = _n && _n.el; if (!_el) return () => {{}}; const _h = ({}); _el.addEventListener('{}', _h, {}); return () => {{ _el.removeEventListener('{}', _h); }}; }}); }} catch {{}} return _n; }})()",
+                indent, inner, handler, event, opts, event
             ),
             // FEL-441: no onMount here — the descriptor is assigned to the
             // hoisted holder synchronously at tree-build; the registration that
@@ -2793,8 +2821,65 @@ fn emit_macro_effects_scoped(
                     rewrite_template_expr(&macro_value_expr(value), signal_map, mode).source,
                 ));
             }
-            n if n.starts_with("bind:") || n.starts_with("on:") => {
-                // These are already handled in emit_attrs — skip here.
+            n if n.starts_with("bind:") => {
+                // Already handled in emit_attrs — skip here.
+            }
+            n if n.starts_with("on:") => {
+                // §2.4 — dotted modifiers, same split as emit_attrs' on: arm.
+                let suffix = &n["on:".len()..];
+                let (event, mods): (&str, Vec<&str>) = match suffix.split_once('.') {
+                    Some((e, m)) => (e, m.split('.').collect()),
+                    None => (suffix, Vec::new()),
+                };
+                if !mods.contains(&"passive") {
+                    // No native listener needed — already emitted as a plain
+                    // function-valued attr in emit_attrs.
+                    continue;
+                }
+                // `.passive` needs a REAL `addEventListener(event, handler,
+                // { passive: true, ... })` registration — arbor's attrs
+                // object only ever hands a plain function to its Path 1
+                // (`typeof === 'function'`) listener shortcut, with no way
+                // to carry listener options through it. Bypass that path
+                // entirely and attach directly to the element, mirroring the
+                // `$show`/`$html`/`$ref` IIFE pattern that captures `_n.el`
+                // inside `onMount`.
+                //
+                // `.once`, when combined with `.passive`, is promoted to the
+                // native `{ once: true }` option too (matching the issue's
+                // own `{ once: true, passive: true }` acceptance example)
+                // rather than the closure-based `_fired` guard `.once` alone
+                // uses — the browser already removes a native-once listener
+                // after it fires, so there's nothing left for the guard to
+                // do. `.prevent`/`.stop`/`.self` stay as handler-body
+                // behavior (wrap_event_modifiers), same as every other
+                // modifier combination.
+                let handler = macro_value_expr(value);
+                // FEL-172: same handler-body rewrite as the Binding path.
+                let t = handler.trim();
+                let bare_ident = !t.is_empty()
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+                let lowered_handler = if bare_ident {
+                    handler.clone()
+                } else {
+                    rewrite_template_expr(t, signal_map, mode).source
+                };
+                let handler_mods: Vec<&str> = mods
+                    .iter()
+                    .copied()
+                    .filter(|m| *m != "once" && *m != "passive")
+                    .collect();
+                let wrapped = wrap_event_modifiers(&lowered_handler, &handler_mods);
+                let opts = if mods.contains(&"once") {
+                    "{ passive: true, once: true }"
+                } else {
+                    "{ passive: true }"
+                };
+                elem_effects.push(ElemEffect::PassiveEvent(
+                    event.to_string(),
+                    wrapped,
+                    opts.to_string(),
+                ));
             }
             "raw" => {
                 // $raw: node is pass-through, no child processing — handled at node level

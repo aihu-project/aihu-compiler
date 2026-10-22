@@ -74,7 +74,7 @@ const KNOWN_DOM_EVENTS: &[&str] = &[
 ];
 
 /// Event-handler modifiers accepted after the event name (`on:click.prevent`).
-const KNOWN_EVENT_MODIFIERS: &[&str] = &["prevent", "stop", "self", "once"];
+const KNOWN_EVENT_MODIFIERS: &[&str] = &["prevent", "stop", "self", "once", "passive"];
 
 /// Bug 9a — heuristic for "this `on:<name>` almost certainly is NOT an
 /// event handler." Returns `true` only for clearly-wrong names so we don't
@@ -597,7 +597,7 @@ pub fn parse_attr(raw: &str, is_html_element: bool) -> Result<Attr, CompileError
                         if !KNOWN_EVENT_MODIFIERS.contains(&m) {
                             return Err(CompileError {
                                 message: format!(
-                                    "unknown event modifier `.{}` on `on:{}` — supported: .prevent, .stop, .self, .once",
+                                    "unknown event modifier `.{}` on `on:{}` — supported: .prevent, .stop, .self, .once, .passive",
                                     m, suffix
                                 ),
                                 line: 0,
@@ -1054,6 +1054,30 @@ mod tests {
             Attr::Macro {
                 name: "on:click.prevent".to_string(),
                 value: MacroValue::Curly("handleClick".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn on_click_with_passive_modifier() {
+        let attr = parse_attr("on:scroll.passive={handleScroll}").unwrap();
+        assert_eq!(
+            attr,
+            Attr::Macro {
+                name: "on:scroll.passive".to_string(),
+                value: MacroValue::Curly("handleScroll".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn on_passive_composes_with_once() {
+        let attr = parse_attr("on:scroll.once.passive={handleScroll}").unwrap();
+        assert_eq!(
+            attr,
+            Attr::Macro {
+                name: "on:scroll.once.passive".to_string(),
+                value: MacroValue::Curly("handleScroll".to_string())
             }
         );
     }
