@@ -147,7 +147,7 @@ bun add @aihu/compiler
 - [Block Structure spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-block-structure.md)
 - [Template Attribute Syntax spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-template-attribute-syntax.md)
 - [Macro Vocabulary spec](https://github.com/aihu-project/aihu/blob/main/docs/superpowers/specs/2026-05-02-spec-macro-vocabulary.md)
-- [Aihu framework root](../../README.md)
+- [Aihu framework root](https://github.com/aihu-project/aihu)
 
 <sub><i>Auto-generated against `@aihu/compiler@1.3.13`.</i></sub>
 

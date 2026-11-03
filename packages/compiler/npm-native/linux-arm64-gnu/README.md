@@ -24,6 +24,7 @@ This package is the platform-specific native binary distributor for [`@aihu/comp
 | `darwin-arm64` (Apple Silicon) | `@aihu/compiler-darwin-arm64` |
 | `darwin-x64` (Intel macOS) | `@aihu/compiler-darwin-x64` |
 | `linux-x64-gnu` (glibc Linux) | `@aihu/compiler-linux-x64-gnu` |
+| `linux-arm64-gnu` (glibc Linux, ARM64) | `@aihu/compiler-linux-arm64-gnu` |
 | `win32-x64-msvc` (Windows) | `@aihu/compiler-win32-x64-msvc` |
 
 If you genuinely need to install only this package (e.g. for an offline mirror):
@@ -34,7 +35,7 @@ npm install @aihu/compiler-native-linux-arm64-gnu
 bun add @aihu/compiler-native-linux-arm64-gnu
 ```
 
-<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.0`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.13`.</i></sub>
 
 <!-- END_AUTOGEN: install -->
 
@@ -45,12 +46,12 @@ bun add @aihu/compiler-native-linux-arm64-gnu
 
 | | |
 |---|---|
-| **Version** | `1.3.0` |
+| **Version** | `1.3.13` |
 | **Tier** | platform — Platform-specific native binary distributor for `@aihu/compiler` |
 | **Published files** | 1 entries |
 | **License** | MIT |
 
-<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.0`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.13`.</i></sub>
 
 <!-- END_AUTOGEN: stats -->
 
@@ -60,9 +61,9 @@ bun add @aihu/compiler-native-linux-arm64-gnu
 <!-- regenerate: bun scripts/sync-readme.ts (also runs in pre-commit + CI) -->
 
 - [@aihu/compiler](../../README.md)
-- [Aihu framework root](../../../../README.md)
+- [Aihu framework root](https://github.com/aihu-project/aihu)
 
-<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.0`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.13`.</i></sub>
 
 <!-- END_AUTOGEN: see-also -->
 
@@ -73,6 +74,6 @@ bun add @aihu/compiler-native-linux-arm64-gnu
 
 MIT — see [LICENSE](../../../../LICENSE).
 
-<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.0`.</i></sub>
+<sub><i>Auto-generated against `@aihu/compiler-native-linux-arm64-gnu@1.3.13`.</i></sub>
 
 <!-- END_AUTOGEN: license -->
